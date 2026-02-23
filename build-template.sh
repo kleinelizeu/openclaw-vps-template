@@ -25,7 +25,7 @@ apt-get install -y \
   nginx \
   python3 python3-pip python3-venv \
   ca-certificates gnupg lsb-release \
-  openssl
+  openssl cloud-init qemu-guest-agent
 
 # ── 2. Instalar Docker CE + Compose v2 ──
 log "Instalando Docker CE"
@@ -98,6 +98,7 @@ ufw default deny incoming
 ufw default allow outgoing
 ufw allow 22/tcp    # SSH
 ufw allow 80/tcp    # Wizard / Nginx
+ufw allow 443/tcp   # HTTPS (futuro SSL)
 ufw allow 18789/tcp # OpenClaw Gateway
 ufw allow 18790/tcp # OpenClaw Bridge
 ufw --force enable
@@ -107,7 +108,49 @@ log "Configurando fail2ban"
 systemctl enable fail2ban
 systemctl start fail2ban
 
-# ── 10. Limpar estado para template ──
+# ── 10. Configurar logrotate para Docker e Gunicorn ──
+log "Configurando logrotate"
+cat > /etc/logrotate.d/openclaw <<'LOGROTATE'
+/var/log/openclaw-*.log {
+    daily
+    missingok
+    rotate 7
+    compress
+    delaycompress
+    notifempty
+    copytruncate
+}
+LOGROTATE
+
+# Limitar tamanho dos logs do Docker daemon
+mkdir -p /etc/docker
+cat > /etc/docker/daemon.json <<'DOCKERJSON'
+{
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "3"
+  }
+}
+DOCKERJSON
+
+# ── 11. Configurar swap (1GB — util para VPS com pouca RAM) ──
+log "Configurando swap de 1GB"
+if [[ ! -f /swapfile ]]; then
+  fallocate -l 1G /swapfile
+  chmod 600 /swapfile
+  mkswap /swapfile
+  swapon /swapfile
+  echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
+# Otimizar swappiness para VPS
+echo 'vm.swappiness=10' > /etc/sysctl.d/99-openclaw-swap.conf
+
+# ── 12. Habilitar qemu-guest-agent (VirtFusion / KVM) ──
+log "Habilitando qemu-guest-agent"
+systemctl enable qemu-guest-agent
+
+# ── 13. Limpar estado para template ──
 log "Limpando estado para conversao em template"
 
 # Parar Docker (containers nao devem rodar no template)
@@ -121,10 +164,8 @@ rm -f /etc/ssh/ssh_host_*
 truncate -s 0 /etc/machine-id
 rm -f /var/lib/dbus/machine-id
 
-# Limpar cloud-init (se presente)
-if command -v cloud-init &>/dev/null; then
-  cloud-init clean --logs --seed
-fi
+# Limpar cloud-init para re-executar no proximo boot
+cloud-init clean --logs --seed
 
 # Limpar logs
 find /var/log -type f -name "*.log" -exec truncate -s 0 {} \;
@@ -145,6 +186,12 @@ rm -rf /tmp/* /var/tmp/*
 rm -f /var/lib/openclaw-firstboot-done
 rm -f /var/lib/openclaw-token
 rm -f /var/lib/openclaw-setup-done
+
+# Zerar espaco livre para melhor compressao do QCOW2
+log "Zerando espaco livre para compressao (pode demorar)..."
+dd if=/dev/zero of=/zero.fill bs=1M 2>/dev/null || true
+rm -f /zero.fill
+sync
 
 log "Template preparado com sucesso!"
 log "Proximo passo: desligue a VM (shutdown -h now) e converta em template QCOW2"
