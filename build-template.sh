@@ -153,8 +153,11 @@ systemctl enable qemu-guest-agent
 # ── 13. Limpar estado para template ──
 log "Limpando estado para conversao em template"
 
-# Parar Docker (containers nao devem rodar no template)
-docker system prune -af --volumes 2>/dev/null || true
+# Parar containers e limpar cache (preservar imagem openclaw:local)
+docker container prune -f 2>/dev/null || true
+docker volume prune -f 2>/dev/null || true
+docker builder prune -af 2>/dev/null || true
+docker image prune -f 2>/dev/null || true
 systemctl stop docker
 
 # Remover SSH host keys (serao regenerados no firstboot)
