@@ -1683,21 +1683,34 @@ def skip_pairing():
 
 
 def finalize_setup():
-    """Marcar setup como concluido e desabilitar wizard."""
+    """Marcar setup como concluido, ativar Nginx e desabilitar wizard."""
     with open(SETUP_DONE_FILE, "w") as f:
         f.write("done")
-    subprocess.run(
-        ["systemctl", "disable", "--now", "openclaw-setup-web"],
-        capture_output=True,
-    )
+
+    # Ativar symlink do Nginx
     nginx_available = "/etc/nginx/sites-available/openclaw"
     nginx_enabled = "/etc/nginx/sites-enabled/openclaw"
     if os.path.exists(nginx_available) and not os.path.exists(nginx_enabled):
         try:
             os.symlink(nginx_available, nginx_enabled)
-            subprocess.run(["systemctl", "enable", "--now", "nginx"], capture_output=True)
         except Exception:
             pass
+
+    # Usar nohup + bash em background para:
+    # 1. Desabilitar o wizard
+    # 2. Parar o wizard (libera porta 80)
+    # 3. Iniciar Nginx
+    # Precisa rodar em background pois stop mata o proprio processo
+    subprocess.Popen(
+        ["bash", "-c",
+         "sleep 2; "
+         "systemctl disable openclaw-setup-web; "
+         "systemctl stop openclaw-setup-web; "
+         "sleep 1; "
+         "systemctl enable --now nginx"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
 
 @app.route("/health")
