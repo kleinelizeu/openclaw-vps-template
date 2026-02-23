@@ -1,0 +1,22 @@
+[Unit]
+Description=OpenClaw Setup Wizard Web Interface
+After=openclaw-firstboot.service network-online.target
+Wants=network-online.target
+ConditionPathExists=/var/lib/openclaw-firstboot-done
+ConditionPathExists=!/var/lib/openclaw-setup-done
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/openclaw-setup
+ExecStart=/opt/openclaw-setup/venv/bin/gunicorn \
+  --bind 0.0.0.0:80 \
+  --workers 2 \
+  --timeout 120 \
+  app:app
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,16 @@
+[Unit]
+Description=OpenClaw VPS First Boot Setup
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=!/var/lib/openclaw-firstboot-done
+Before=openclaw-setup-web.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/openclaw-setup/firstboot.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,56 @@
+#!/bin/bash
+# OpenClaw VPS — MOTD (Message of the Day)
+# Exibido quando o usuario faz SSH na VPS.
+
+TOKEN_FILE="/var/lib/openclaw-token"
+SETUP_DONE_FILE="/var/lib/openclaw-setup-done"
+OPENCLAW_DIR="/opt/openclaw"
+
+# Detectar IP
+SERVER_IP=$(hostname -I | awk '{print $1}')
+
+echo ""
+echo "  ╔══════════════════════════════════════════════╗"
+echo "  ║           OpenClaw VPS Template              ║"
+echo "  ╚══════════════════════════════════════════════╝"
+echo ""
+
+if [[ ! -f "${SETUP_DONE_FILE}" ]]; then
+    TOKEN="(nao gerado)"
+    if [[ -f "${TOKEN_FILE}" ]]; then
+        TOKEN=$(cat "${TOKEN_FILE}")
+    fi
+
+    echo "  STATUS: Aguardando configuracao"
+    echo ""
+    echo "  Acesse o wizard de setup no navegador:"
+    echo "  http://${SERVER_IP}/"
+    echo ""
+    echo "  Token de acesso: ${TOKEN}"
+    echo ""
+    echo "  ─────────────────────────────────────────────"
+    echo "  Apos o setup, o OpenClaw estara disponivel em:"
+    echo "  http://${SERVER_IP}:18789/?token=${TOKEN}"
+    echo ""
+else
+    TOKEN="(nao disponivel)"
+    if [[ -f "${TOKEN_FILE}" ]]; then
+        TOKEN=$(cat "${TOKEN_FILE}")
+    fi
+
+    echo "  STATUS: OpenClaw rodando"
+    echo ""
+    echo "  Acesse o OpenClaw:"
+    echo "  http://${SERVER_IP}:18789/?token=${TOKEN}"
+    echo ""
+    echo "  ─────────────────────────────────────────────"
+    echo "  Comandos uteis:"
+    echo "    docker compose -f ${OPENCLAW_DIR}/docker-compose.yml ps"
+    echo "    docker compose -f ${OPENCLAW_DIR}/docker-compose.yml logs -f"
+    echo "    docker compose -f ${OPENCLAW_DIR}/docker-compose.yml restart"
+    echo ""
+    echo "  Arquivos de configuracao:"
+    echo "    ${OPENCLAW_DIR}/.env"
+    echo "    /root/.openclaw/config/"
+    echo ""
+fi
