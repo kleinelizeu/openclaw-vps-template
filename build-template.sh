@@ -196,5 +196,5 @@ dd if=/dev/zero of=/zero.fill bs=1M 2>/dev/null || true
 rm -f /zero.fill
 sync
 
-log "Template preparado com sucesso!"
-log "Proximo passo: desligue a VM (shutdown -h now) e converta em template QCOW2"
+log "Template preparado com sucesso! Reiniciando..."
+reboot
