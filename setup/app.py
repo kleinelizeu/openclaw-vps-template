@@ -1696,18 +1696,19 @@ def finalize_setup():
         except Exception:
             pass
 
-    # Usar nohup + bash em background para:
-    # 1. Desabilitar o wizard
-    # 2. Parar o wizard (libera porta 80)
-    # 3. Iniciar Nginx
-    # Precisa rodar em background pois stop mata o proprio processo
+    # Criar script de transicao e executar via systemd-run (processo independente)
+    # Precisa ser independente pois systemctl stop mata o proprio processo Gunicorn
+    switch_script = "/tmp/openclaw-switch-to-nginx.sh"
+    with open(switch_script, "w") as f:
+        f.write("#!/bin/bash\n")
+        f.write("sleep 3\n")
+        f.write("systemctl disable openclaw-setup-web\n")
+        f.write("systemctl stop openclaw-setup-web\n")
+        f.write("sleep 2\n")
+        f.write("systemctl enable --now nginx\n")
+    os.chmod(switch_script, 0o755)
     subprocess.Popen(
-        ["bash", "-c",
-         "sleep 2; "
-         "systemctl disable openclaw-setup-web; "
-         "systemctl stop openclaw-setup-web; "
-         "sleep 1; "
-         "systemctl enable --now nginx"],
+        ["systemd-run", "--scope", "--quiet", switch_script],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
