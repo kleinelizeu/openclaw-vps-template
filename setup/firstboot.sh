@@ -43,7 +43,8 @@ cat > /root/.openclaw/openclaw.json <<OCJSON
   "gateway": {
     "mode": "local",
     "controlUi": {
-      "dangerouslyDisableDeviceAuth": true
+      "dangerouslyDisableDeviceAuth": true,
+      "dangerouslyAllowHostHeaderOriginFallback": true
     }
   }
 }

@@ -1520,10 +1520,11 @@ def setup():
         os.chmod(TOKEN_FILE, 0o600)
         update_env("OPENCLAW_GATEWAY_TOKEN", token)
 
-    # Garantir dangerouslyDisableDeviceAuth
+    # Garantir dangerouslyDisableDeviceAuth e origin fallback para acesso LAN
     config.setdefault("gateway", {})
     config["gateway"].setdefault("controlUi", {})
     config["gateway"]["controlUi"]["dangerouslyDisableDeviceAuth"] = True
+    config["gateway"]["controlUi"]["dangerouslyAllowHostHeaderOriginFallback"] = True
 
     # Salvar modelo selecionado pelo usuario
     if selected_model:
