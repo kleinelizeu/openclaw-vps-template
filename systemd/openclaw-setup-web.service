@@ -11,7 +11,7 @@ WorkingDirectory=/opt/openclaw-setup
 ExecStart=/opt/openclaw-setup/venv/bin/gunicorn \
   --bind 0.0.0.0:80 \
   --workers 2 \
-  --timeout 120 \
+  --timeout 300 \
   app:app
 Restart=on-failure
 RestartSec=5
