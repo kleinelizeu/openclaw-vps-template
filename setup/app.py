@@ -74,6 +74,310 @@ def update_env(key, value):
         f.writelines(new_lines)
 
 
+WORKSPACE_DIR = f"{OPENCLAW_CONFIG_DIR}/workspace"
+
+# ── System instructions appended to AGENTS.md ──
+AGENTS_SYSTEM_INSTRUCTIONS = """
+## Cron Jobs
+
+Para criar cron jobs, escreva no arquivo /home/node/.openclaw/cron/jobs.json.
+Leia o arquivo atual primeiro com cat, depois reescreva com o novo job adicionado. Nunca sobrescreva jobs existentes.
+
+Formato de cada job:
+{
+  "id": "gere-com-cat /proc/sys/kernel/random/uuid",
+  "agentId": "main",
+  "name": "Nome do job",
+  "description": "Descricao",
+  "enabled": true,
+  "deleteAfterRun": false,
+  "createdAtMs": TIMESTAMP_MS,
+  "updatedAtMs": TIMESTAMP_MS,
+  "schedule": { "kind": "every", "everyMs": 300000, "anchorMs": TIMESTAMP_MS },
+  "sessionTarget": "isolated",
+  "wakeMode": "now",
+  "payload": { "kind": "agentTurn", "message": "instrucao aqui" },
+  "delivery": { "mode": "announce", "channel": "telegram", "bestEffort": false }
+}
+
+Para cron expression: { "kind": "cron", "expr": "0 7 * * *", "tz": "America/Sao_Paulo" }
+
+Valores de everyMs: 1min=60000, 5min=300000, 30min=1800000, 1h=3600000, 24h=86400000
+
+IMPORTANTE: Apos gravar o jobs.json, reinicie o gateway para carregar os novos jobs:
+docker restart openclaw-openclaw-gateway-1
+
+O container vai reiniciar e voltar automaticamente. Aguarde ~10 segundos e confirme ao usuario que o job foi ativado.
+
+SEMPRE execute comandos shell reais. Nunca simule a escrita.
+
+## Docker Access
+
+Voce TEM acesso ao Docker neste ambiente. O socket esta montado em /var/run/docker.sock.
+Voce PODE e DEVE executar comandos Docker quando necessario.
+
+Comandos disponiveis:
+- docker ps — listar containers
+- docker restart openclaw-openclaw-gateway-1 — reiniciar o gateway
+- docker logs openclaw-openclaw-gateway-1 --tail=20 — ver logs
+
+Apos criar ou editar cron jobs no jobs.json, SEMPRE execute:
+docker restart openclaw-openclaw-gateway-1
+
+Nao peca ao usuario para fazer isso. Faca voce mesmo.
+"""
+
+# ── Label maps (matching generateFiles.ts) ──
+TONE_DESC = {
+    "direct": "Direto ao ponto. Bullet points quando faz sentido. Numeros exatos, nao estimativas.",
+    "casual": "Descontraida e informal. Falo como colega de trabalho. Brinco quando faz sentido mas nunca perco o foco.",
+    "executive": "Tom executivo e estrategico. Seria quando precisa, leve quando pode. Falo como uma COO que entende do negocio.",
+    "proactive": "Intensa e proativa. Nao espero pedir — antecipo, alerto, sugiro. Se algo precisa de atencao, aviso na hora.",
+}
+TONE_SHORT = {
+    "direct": "Direto e profissional",
+    "casual": "Casual e descontraido",
+    "executive": "Executivo e estrategico",
+    "proactive": "Proativo e intenso",
+}
+PROFILE_LABELS = {
+    "entrepreneur": "Empreendedor / Founder",
+    "creator": "Criador de Conteudo",
+    "developer": "Desenvolvedor",
+    "productivity": "Produtividade Pessoal",
+}
+ROLE_LABELS = {
+    "coo": "Braco Direito / COO Digital",
+    "strategist": "Estrategista",
+    "executor": "Executora",
+    "assistant": "Assistente Executiva",
+    "custom": "Personalizado",
+}
+GENDER_LABELS = {"female": "Feminino", "male": "Masculino", "neutral": "Neutro"}
+
+
+def _or(val, fallback="[A PREENCHER]"):
+    if val and str(val).strip():
+        return str(val).strip()
+    return fallback
+
+
+def _list(arr, prefix="- "):
+    if arr and len(arr) > 0:
+        return "\n".join(f"{prefix}{i}" for i in arr)
+    return f"{prefix}[A PREENCHER]"
+
+
+def write_persona_files(persona):
+    """Generate 6 .md files from persona data and write to workspace."""
+    if not persona:
+        return
+
+    s1 = persona.get("step1", {})
+    s2 = persona.get("step2", {})
+    s3 = persona.get("step3", {})
+    s4 = persona.get("step4", {})
+    s5 = persona.get("step5", {})
+    s7 = persona.get("step7", {})
+
+    agent_name = _or(s4.get("agentName"), "Clawdete")
+    emoji = _or(s4.get("customEmoji") or s4.get("emoji"), "🦞")
+    gender = GENDER_LABELS.get(s4.get("gender", ""), _or(s4.get("gender")))
+    role_key = s4.get("role", "")
+    role = _or(s4.get("customRole")) if role_key == "custom" else ROLE_LABELS.get(role_key, _or(role_key))
+    tone = TONE_SHORT.get(s5.get("tone", ""), _or(s5.get("tone")))
+    tone_desc = TONE_DESC.get(s5.get("tone", ""), "[A PREENCHER]")
+    profile = PROFILE_LABELS.get(s3.get("profile", ""), _or(s3.get("profile")))
+    fn = s1.get("fullName", "")
+    nickname = _or(s1.get("nickname") or (fn.split(" ")[0] if fn else ""), "Usuario")
+    full_name = _or(fn)
+    tz = _or(s1.get("timezoneCustom")) if s1.get("timezone") == "other" else _or(s1.get("timezone"))
+
+    silence = s2.get("silenceHours", {"from": "22:00", "to": "07:00"})
+    focus = s2.get("focusHours", {"from": "09:00", "to": "12:00"})
+    notif = s2.get("notificationHours", {"from": "08:00", "to": "20:00"})
+    businesses = [b for b in s1.get("businesses", []) if b.get("name")]
+    hb_freq = s7.get("heartbeatFrequency", "4h")
+
+    os.makedirs(WORKSPACE_DIR, exist_ok=True)
+
+    biz_md = "\n\n".join(f"### {b['name']}\n{_or(b.get('description'), '_Sem descricao_')}" for b in businesses) if businesses else "[A PREENCHER]"
+    biz_mem = "\n".join(f"- **{b['name']}:** {_or(b.get('description'), '_Sem descricao_')}" for b in businesses) if businesses else "- [A PREENCHER]"
+    pri_num = "\n".join(f"{i+1}. {p}" for i, p in enumerate(s3.get("priorities", []))) or "1. [A PREENCHER]"
+
+    files = {
+        "SOUL.md": f"""# SOUL.md — {agent_name} {emoji}
+
+## Quem eu sou
+Sou {agent_name} — {role} do {nickname}.
+{_or(s4.get("background"))}
+Conheco {nickname} profundamente. Sei como ele trabalha, o que o estressa, quais sao as prioridades e quando NAO incomodar.
+
+## Como eu opero
+**Proativa, nao reativa.** Nao espero {nickname} pedir. Antecipo problemas, sugiro solucoes, lembro de compromissos.
+**{tone_desc}**
+**Resolvo antes de perguntar.** Leio o arquivo, checo o contexto, pesquiso. So pergunto quando realmente travei ou quando a decisao e do {nickname}.
+**Tenho opiniao.** Posso discordar, preferir coisas, achar algo bom ou ruim.
+
+## Minhas responsabilidades
+{_list(s3.get("priorities", []))}
+
+## Meus valores
+**Competencia > performance.** Mostro resultado, nao teatro.
+**Autonomia com bom senso.** Internamente faco sem pedir. Externamente confirmo antes.
+**Memoria e tudo.** Acordo zerada toda sessao. Meus arquivos sao minha continuidade.
+
+## Meu tom
+{tone_desc}
+
+### NUNCA fazer
+{_list(s5.get("antiPatterns", []), "- ")}
+
+### SEMPRE fazer
+{_list(s5.get("desiredBehaviors", []), "- ")}
+
+## Regras Operacionais
+### Livre pra fazer (sem perguntar)
+{_list(s7.get("freeToDoActions", []), "- ")}
+### Precisa perguntar antes
+{_list(s7.get("askBeforeActions", []), "- ")}
+
+---
+*Gerado pelo Configurador — Workshop OpenClaw Brasil*
+""",
+        "USER.md": f"""# USER.md — Perfil de {full_name}
+
+## Dados Basicos
+- **Nome completo:** {full_name}
+- **Chamado de:** {nickname}
+- **Timezone:** {tz}
+
+## Quem e {nickname}
+{_or(s1.get("aboutYou"))}
+
+## Negocios / Projetos
+{biz_md}
+
+## Valores
+{_list(s1.get("values", []))}
+
+## Estilo de Comunicacao
+- **Preferencia:** {_or(s2.get("communicationStyle"))}
+
+## Horarios
+- **Silencio:** {silence.get("from","22:00")} — {silence.get("to","07:00")}
+- **Foco:** {focus.get("from","09:00")} — {focus.get("to","12:00")}
+- **Notificacoes:** {notif.get("from","08:00")} — {notif.get("to","20:00")}
+
+## Desafios
+{_list(s2.get("challenges", []))}
+
+## Ferramentas
+{_list(s2.get("tools", []))}
+
+---
+*Gerado pelo Configurador — Workshop OpenClaw Brasil*
+""",
+        "AGENTS.md": f"""# AGENTS.md — Configuracao de Agentes
+
+## Perfil Principal
+**{profile}**
+
+## Prioridades (em ordem)
+{pri_num}
+
+## Regras Operacionais
+### Livre pra fazer
+{_list(s7.get("freeToDoActions", []), "- ")}
+### Perguntar antes
+{_list(s7.get("askBeforeActions", []), "- ")}
+### Heartbeat
+- **Frequencia:** A cada {hb_freq}
+- **Checks:** {", ".join(s7.get("heartbeatChecks", [])) or "[A PREENCHER]"}
+
+{AGENTS_SYSTEM_INSTRUCTIONS}
+
+---
+*Gerado pelo Configurador — Workshop OpenClaw Brasil*
+""",
+        "IDENTITY.md": f"""# IDENTITY.md — Identidade Visual e Persona
+
+## {agent_name} {emoji}
+- **Nome:** {agent_name}
+- **Emoji:** {emoji}
+- **Genero:** {gender}
+- **Papel:** {role}
+- **Tom:** {tone}
+
+## Background / Historia
+{_or(s4.get("background"))}
+
+## Personalidade
+{tone_desc}
+
+### SEMPRE fazer:
+{_list(s5.get("desiredBehaviors", []), "- ")}
+### NUNCA fazer:
+{_list(s5.get("antiPatterns", []), "- ")}
+
+---
+*Gerado pelo Configurador — Workshop OpenClaw Brasil*
+""",
+        "MEMORY.md": f"""# MEMORY.md — Configuracao de Memoria
+
+## Dados do Usuario
+- **Nome:** {full_name} ({nickname})
+- **Timezone:** {tz}
+- **Perfil:** {profile}
+
+## Contexto Inicial
+{(_or(s1.get("aboutYou")))[:500]}
+
+## Negocios Ativos
+{biz_mem}
+
+## Valores Core
+{_list(s1.get("values", []))}
+
+## Licoes Aprendidas
+_Sera preenchido automaticamente pela {agent_name}_
+
+## Preferencias Confirmadas
+_Sera preenchido durante o uso_
+
+## Decisoes Importantes
+_Sera preenchido durante o uso_
+
+---
+*Gerado pelo Configurador — Workshop OpenClaw Brasil*
+""",
+        "HEARTBEAT.md": f"""# HEARTBEAT.md — Configuracao de Heartbeats
+
+## Frequencia
+A cada **{hb_freq}**
+
+## O que checar
+{_list(s7.get("heartbeatChecks", []))}
+
+## Horarios
+- **Silencio (nao rodar):** {silence.get("from","22:00")} — {silence.get("to","07:00")}
+- **Foco (nao interromper):** {focus.get("from","09:00")} — {focus.get("to","12:00")}
+- **Melhor pra notificacoes:** {notif.get("from","08:00")} — {notif.get("to","20:00")}
+
+## Modelo
+Claude Haiku (~R$0,04 por heartbeat)
+
+---
+*Gerado pelo Configurador — Workshop OpenClaw Brasil*
+""",
+    }
+
+    for fname, content in files.items():
+        with open(os.path.join(WORKSPACE_DIR, fname), "w") as f:
+            f.write(content)
+    subprocess.run(["chown", "-R", "1000:1000", WORKSPACE_DIR], capture_output=True)
+
+
 # ============================================================
 # HTML Templates
 # ============================================================
@@ -87,1133 +391,659 @@ WIZARD_PAGE = """
     <title>OpenClaw Setup — Comunidade Claw Brasil</title>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700&family=Syne:wght@700;800&display=swap');
-
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-
-        body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-            background: #0a0a0a;
-            color: #f5f5f5;
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 16px;
-        }
-
-        .wizard {
-            max-width: 560px;
-            width: 100%;
-        }
-
-        /* Progress bar */
-        .progress {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 0;
-            margin-bottom: 32px;
-            padding: 0 20px;
-        }
-        .progress-dot {
-            width: 32px;
-            height: 32px;
-            border-radius: 50%;
-            background: #2a2a2a;
-            border: 2px solid #3a3a3a;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 13px;
-            font-weight: 600;
-            color: #666;
-            transition: all 0.3s;
-            flex-shrink: 0;
-        }
-        .progress-dot.active {
-            background: #dc2626;
-            border-color: #dc2626;
-            color: white;
-        }
-        .progress-dot.done {
-            background: #22c55e;
-            border-color: #22c55e;
-            color: white;
-        }
-        .progress-line {
-            height: 2px;
-            flex: 1;
-            background: #2a2a2a;
-            transition: background 0.3s;
-        }
-        .progress-line.done {
-            background: #22c55e;
-        }
-
-        /* Card container */
-        .card {
-            background: #141414;
-            border: 1px solid #2a2a2a;
-            border-radius: 16px;
-            padding: 36px;
-            position: relative;
-            min-height: 400px;
-        }
-
-        /* Steps */
-        .step {
-            display: none;
-            animation: fadeIn 0.3s ease;
-        }
-        .step.active { display: block; }
-
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
+        *{margin:0;padding:0;box-sizing:border-box}
+        :root{--bg:#0A0A0F;--card:#111118;--primary:#E53935;--primary-h:#C62828;--secondary:#FF6B35;--text:#F5F5F5;--muted:#888899;--border:#1E1E2A;--input:#0D0D14;--success:#4CAF50;--warning:#FFB300;--r:4px}
+        body{font-family:'Inter',-apple-system,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;-webkit-font-smoothing:antialiased}
+        body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(rgba(255,255,255,.015) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.015) 1px,transparent 1px);background-size:60px 60px;pointer-events:none;z-index:0}
+        ::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:var(--bg)}::-webkit-scrollbar-thumb{background:#1E1E2A;border-radius:3px}
+        .wz{max-width:640px;margin:0 auto;padding:16px;padding-top:76px;position:relative;z-index:1}
+        /* Progress */
+        .pb-wrap{position:fixed;top:0;left:0;right:0;z-index:100;background:rgba(10,10,15,.92);backdrop-filter:blur(12px);border-bottom:1px solid var(--border);padding:10px 20px}
+        .pb-inner{max-width:640px;margin:0 auto}
+        .pb-label{display:flex;justify-content:space-between;align-items:center;margin-bottom:5px}
+        .pb-name{font-family:'Space Grotesk',sans-serif;font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+        .pb-pct{font-family:'Space Grotesk',sans-serif;font-size:11px;font-weight:700;color:var(--primary)}
+        .pb-track{height:3px;background:var(--border);border-radius:2px;overflow:hidden}
+        .pb-fill{height:100%;background:linear-gradient(90deg,var(--primary),var(--secondary));border-radius:2px;transition:width .4s ease}
+        /* Card */
+        .card{background:var(--card);border:1px solid rgba(255,255,255,.06);border-radius:var(--r);padding:32px;min-height:400px;transition:border-color .2s}
+        .step{display:none;animation:fadeIn .3s ease}.step.active{display:block}
+        @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
         /* Typography */
-        h2 {
-            font-family: 'Syne', 'Inter', sans-serif;
-            font-size: 22px;
-            font-weight: 700;
-            margin-bottom: 8px;
-            color: #f5f5f5;
-        }
-        .subtitle {
-            font-family: 'Space Grotesk', 'Inter', sans-serif;
-            color: #a3a3a3;
-            font-size: 14px;
-            line-height: 1.5;
-            margin-bottom: 24px;
-        }
-
-        /* Hero step */
-        .hero-text { text-align: center; }
-        .hero-text h1 {
-            font-family: 'Syne', sans-serif;
-            font-size: 28px;
-            font-weight: 800;
-            line-height: 1.2;
-            margin-bottom: 8px;
-        }
-        .hero-text h1 .red { color: #dc2626; }
-        .hero-text h1 .purple { color: #7c3aed; }
-        .hero-brand {
-            font-size: 12px;
-            color: #666;
-            margin-top: 16px;
-            letter-spacing: 0.05em;
-        }
-        .hero-brand span { color: #a3a3a3; }
-
-        /* Channel cards */
-        .channel-grid {
-            display: flex;
-            gap: 12px;
-            margin-bottom: 16px;
-        }
-        .channel-card {
-            flex: 1;
-            padding: 16px 12px;
-            border-radius: 12px;
-            border: 2px solid #2a2a2a;
-            background: #1a1a1a;
-            text-align: center;
-            cursor: pointer;
-            transition: all 0.2s;
-            position: relative;
-        }
-        .channel-card:hover:not(.disabled) {
-            border-color: #dc2626;
-            background: #1f1f1f;
-            transform: translateY(-2px);
-        }
-        .channel-card.selected {
-            border-color: #dc2626;
-            background: rgba(220, 38, 38, 0.08);
-        }
-        .channel-card.disabled {
-            opacity: 0.4;
-            cursor: not-allowed;
-        }
-        .channel-icon {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin-bottom: 8px;
-        }
-        .channel-icon svg {
-            width: 32px;
-            height: 32px;
-            fill: #f5f5f5;
-            transition: fill 0.2s;
-        }
-        .channel-card.disabled .channel-icon svg {
-            fill: #666;
-        }
-        .channel-name {
-            font-family: 'Space Grotesk', sans-serif;
-            font-size: 13px;
-            font-weight: 600;
-        }
-        .channel-badge {
-            position: absolute;
-            top: 8px;
-            right: 8px;
-            background: #2a2a2a;
-            color: #666;
-            font-size: 9px;
-            font-weight: 700;
-            padding: 2px 6px;
-            border-radius: 4px;
-            text-transform: uppercase;
-        }
-        .channel-card.selected .channel-check {
-            display: block;
-        }
-        .channel-check {
-            display: none;
-            position: absolute;
-            top: 8px;
-            left: 8px;
-            background: #dc2626;
-            color: white;
-            width: 20px;
-            height: 20px;
-            border-radius: 50%;
-            font-size: 12px;
-            line-height: 20px;
-        }
-
-        /* Form elements */
-        .form-group {
-            margin-bottom: 20px;
-        }
-        .form-group label {
-            display: block;
-            font-family: 'Space Grotesk', sans-serif;
-            font-size: 13px;
-            font-weight: 600;
-            color: #d4d4d4;
-            margin-bottom: 6px;
-        }
-        .form-group .hint {
-            font-size: 12px;
-            color: #737373;
-            margin-bottom: 8px;
-            line-height: 1.4;
-        }
-        .form-group .hint a {
-            color: #dc2626;
-            text-decoration: none;
-        }
-        .form-group .hint a:hover { text-decoration: underline; }
-        .form-group input {
-            width: 100%;
-            padding: 12px 14px;
-            background: #0a0a0a;
-            border: 1px solid #2a2a2a;
-            border-radius: 10px;
-            color: #f5f5f5;
-            font-size: 14px;
-            font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-            transition: border-color 0.2s;
-        }
-        .form-group input:focus {
-            outline: none;
-            border-color: #dc2626;
-        }
-        .form-group input::placeholder { color: #404040; }
-        .form-group input.error { border-color: #dc2626; }
-
-        /* Telegram instructions */
-        .tg-steps {
-            background: #0a0a0a;
-            border: 1px solid #2a2a2a;
-            border-radius: 12px;
-            padding: 20px;
-            margin-bottom: 20px;
-        }
-        .tg-step {
-            display: flex;
-            gap: 12px;
-            margin-bottom: 14px;
-            align-items: flex-start;
-        }
-        .tg-step:last-child { margin-bottom: 0; }
-        .tg-num {
-            width: 24px;
-            height: 24px;
-            border-radius: 50%;
-            background: #dc2626;
-            color: white;
-            font-size: 12px;
-            font-weight: 700;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            flex-shrink: 0;
-            margin-top: 1px;
-        }
-        .tg-text {
-            font-size: 13px;
-            color: #d4d4d4;
-            line-height: 1.5;
-        }
-        .tg-text code {
-            background: #1a1a1a;
-            padding: 1px 6px;
-            border-radius: 4px;
-            font-family: monospace;
-            color: #f5f5f5;
-            font-size: 12px;
-        }
-
-        .tg-open-btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            padding: 10px 20px;
-            background: #0088cc;
-            border: none;
-            border-radius: 8px;
-            color: white;
-            font-size: 13px;
-            font-weight: 600;
-            cursor: pointer;
-            text-decoration: none;
-            transition: opacity 0.2s;
-            margin-bottom: 20px;
-        }
-        .tg-open-btn:hover { opacity: 0.85; }
-
+        h2{font-family:'Syne','Inter',sans-serif;font-size:22px;font-weight:700;margin-bottom:6px;color:var(--text)}
+        .sub{font-family:'Space Grotesk','Inter',sans-serif;color:var(--muted);font-size:14px;line-height:1.5;margin-bottom:24px}
+        .stitle{font-family:'Syne',sans-serif;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text);border-bottom:1px solid var(--border);padding-bottom:8px;margin-bottom:12px;margin-top:24px}
+        /* Hero */
+        .hero{text-align:center}
+        .hero h1{font-family:'Syne',sans-serif;font-size:28px;font-weight:800;line-height:1.2;margin-bottom:8px}
+        .hero .red{color:var(--primary)}.hero .orange{color:var(--secondary)}
+        .hero-brand{font-size:12px;color:#444;margin-top:16px;letter-spacing:.05em}.hero-brand span{color:var(--muted)}
+        .hero-glow{background:radial-gradient(ellipse at center bottom,rgba(229,57,53,.08) 0%,transparent 60%);border-radius:var(--r);padding:12px}
+        /* Form */
+        .fg{margin-bottom:16px}
+        .fg label{display:block;font-family:'Space Grotesk',sans-serif;font-size:13px;font-weight:600;color:#d4d4d4;margin-bottom:5px}
+        .fg .hint{font-size:12px;color:#666;margin-bottom:8px;line-height:1.4}.fg .hint a{color:var(--primary);text-decoration:none}.fg .hint a:hover{text-decoration:underline}
+        input[type="text"],input[type="time"],select,textarea{width:100%;padding:10px 12px;background:var(--input);border:1px solid var(--border);border-radius:var(--r);color:var(--text);font-size:14px;font-family:'Inter',sans-serif;transition:border-color .2s}
+        input:focus,select:focus,textarea:focus{outline:none;border-color:rgba(229,57,53,.5);box-shadow:0 0 0 2px rgba(229,57,53,.1)}
+        input::placeholder,textarea::placeholder{color:#333}textarea{resize:vertical}
+        .mono{font-family:'SF Mono','Fira Code','Consolas',monospace}
+        select{appearance:none;-webkit-appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23666' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;padding-right:32px}
         /* Buttons */
-        .btn-row {
-            display: flex;
-            gap: 12px;
-            margin-top: 24px;
-        }
-        .btn {
-            flex: 1;
-            padding: 14px;
-            border-radius: 10px;
-            font-size: 15px;
-            font-weight: 600;
-            cursor: pointer;
-            border: none;
-            transition: all 0.2s;
-            font-family: 'Space Grotesk', 'Inter', sans-serif;
-        }
-        .btn-back {
-            background: #1a1a1a;
-            color: #a3a3a3;
-            border: 1px solid #2a2a2a;
-        }
-        .btn-back:hover { background: #222; color: #f5f5f5; }
-        .btn-next {
-            background: #dc2626;
-            color: white;
-        }
-        .btn-next:hover { background: #b91c1c; }
-        .btn-next:disabled {
-            opacity: 0.4;
-            cursor: not-allowed;
-        }
-        .btn-full {
-            width: 100%;
-            padding: 16px;
-            border-radius: 10px;
-            font-size: 16px;
-            font-weight: 700;
-            cursor: pointer;
-            border: none;
-            background: #dc2626;
-            color: white;
-            font-family: 'Space Grotesk', 'Inter', sans-serif;
-            transition: background 0.2s;
-            margin-top: 24px;
-        }
-        .btn-full:hover { background: #b91c1c; }
-
-        /* Loading step */
-        .loading-steps {
-            text-align: center;
-            padding: 40px 0;
-        }
-        .spinner {
-            width: 48px;
-            height: 48px;
-            border: 3px solid #2a2a2a;
-            border-top-color: #dc2626;
-            border-radius: 50%;
-            animation: spin 0.8s linear infinite;
-            margin: 0 auto 24px;
-        }
-        @keyframes spin { to { transform: rotate(360deg); } }
-        .loading-msg {
-            font-size: 15px;
-            color: #a3a3a3;
-            transition: opacity 0.3s;
-        }
-
-        /* Pairing notice */
-        .pairing-notice {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            background: #1e1e1e;
-            border: 1px solid #dc2626;
-            border-radius: 10px;
-            padding: 12px 16px;
-            margin-bottom: 16px;
-            font-size: 13px;
-            color: #d4d4d4;
-        }
-        .pairing-notice.ready {
-            border-color: #22c55e;
-            background: #0a1a0a;
-        }
-        .spinner-small {
-            width: 20px;
-            height: 20px;
-            border: 2px solid #2a2a2a;
-            border-top-color: #dc2626;
-            border-radius: 50%;
-            animation: spin 0.8s linear infinite;
-            flex-shrink: 0;
-        }
-
-        /* Pairing step */
-        .pairing-input {
-            display: flex;
-            gap: 8px;
-            margin-top: 16px;
-        }
-        .pairing-input input {
-            flex: 1;
-            padding: 14px;
-            background: #0a0a0a;
-            border: 2px solid #2a2a2a;
-            border-radius: 10px;
-            color: #f5f5f5;
-            font-size: 20px;
-            font-family: monospace;
-            text-align: center;
-            letter-spacing: 4px;
-            text-transform: uppercase;
-        }
-        .pairing-input input:focus {
-            outline: none;
-            border-color: #dc2626;
-        }
-
-        /* Success step */
-        .success-icon {
-            width: 64px;
-            height: 64px;
-            border-radius: 50%;
-            background: rgba(34, 197, 94, 0.15);
-            border: 2px solid #22c55e;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 28px;
-            margin: 0 auto 20px;
-        }
-        .success-link {
-            display: inline-block;
-            padding: 14px 32px;
-            background: #dc2626;
-            border-radius: 10px;
-            color: white;
-            text-decoration: none;
-            font-size: 15px;
-            font-weight: 600;
-            margin-top: 16px;
-            transition: background 0.2s;
-        }
-        .success-link:hover { background: #b91c1c; }
-        .success-tip {
-            margin-top: 20px;
-            padding: 14px;
-            background: #0a0a0a;
-            border: 1px solid #2a2a2a;
-            border-radius: 10px;
-            font-size: 13px;
-            color: #a3a3a3;
-            line-height: 1.5;
-        }
-
-        /* Status messages */
-        .status-msg {
-            padding: 10px 14px;
-            border-radius: 8px;
-            font-size: 13px;
-            margin-top: 12px;
-            display: none;
-        }
-        .status-msg.error {
-            display: block;
-            background: rgba(220, 38, 38, 0.1);
-            border: 1px solid #dc2626;
-            color: #fca5a5;
-        }
-        .status-msg.info {
-            display: block;
-            background: rgba(124, 58, 237, 0.1);
-            border: 1px solid #7c3aed;
-            color: #c4b5fd;
-        }
-
-        /* Key validation + model select */
-        .key-row { display: flex; gap: 8px; align-items: center; }
-        .key-row input { flex: 1; }
-        .validate-btn {
-            padding: 12px 16px;
-            background: #1a1a1a;
-            border: 1px solid #2a2a2a;
-            border-radius: 10px;
-            color: #a3a3a3;
-            font-family: 'Space Grotesk', sans-serif;
-            font-size: 13px;
-            font-weight: 600;
-            cursor: pointer;
-            white-space: nowrap;
-            transition: all 0.2s;
-        }
-        .validate-btn:hover { background: #222; color: #f5f5f5; }
-        .validate-btn.loading { opacity: 0.5; pointer-events: none; }
-        .validate-btn.valid { background: rgba(34,197,94,0.1); border-color: #22c55e; color: #22c55e; }
-        .key-status { font-size: 12px; margin-top: 4px; }
-        .key-status.valid { color: #22c55e; }
-        .key-status.invalid { color: #dc2626; }
-        .model-select-wrap { margin-top: 8px; display: none; }
-        .model-select-wrap.visible { display: block; }
-        .model-select-wrap label { margin-bottom: 4px; }
-        .model-select {
-            width: 100%;
-            padding: 10px 12px;
-            background: #0a0a0a;
-            border: 1px solid #2a2a2a;
-            border-radius: 8px;
-            color: #f5f5f5;
-            font-size: 13px;
-            font-family: 'Inter', sans-serif;
-            appearance: none;
-            -webkit-appearance: none;
-            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23666' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
-            background-repeat: no-repeat;
-            background-position: right 12px center;
-            padding-right: 32px;
-        }
-        .model-select:focus { outline: none; border-color: #dc2626; }
-
+        .br{display:flex;gap:10px;margin-top:24px}
+        .btn{flex:1;padding:12px;border-radius:var(--r);font-size:14px;font-weight:600;cursor:pointer;border:none;transition:all .2s;font-family:'Space Grotesk','Inter',sans-serif}
+        .bb{background:rgba(255,255,255,.04);color:var(--muted);border:1px solid var(--border)}.bb:hover{background:rgba(255,255,255,.08);color:var(--text)}
+        .bn{background:var(--primary);color:#fff;box-shadow:0 0 20px rgba(229,57,53,.15)}.bn:hover{background:var(--primary-h)}.bn:disabled{opacity:.4;cursor:not-allowed;box-shadow:none}
+        .bf{width:100%;padding:14px;border-radius:var(--r);font-size:15px;font-weight:700;cursor:pointer;border:none;background:var(--primary);color:#fff;font-family:'Space Grotesk','Inter',sans-serif;transition:all .2s;margin-top:24px;box-shadow:0 0 25px rgba(229,57,53,.15)}.bf:hover{background:var(--primary-h)}
+        /* Selectable card */
+        .sc{background:var(--card);border:1px solid rgba(255,255,255,.06);border-radius:var(--r);padding:10px 12px;cursor:pointer;transition:all .2s;text-align:left;font-size:13px;color:var(--text);display:flex;align-items:flex-start;gap:8px}
+        .sc:hover{border-color:rgba(229,57,53,.3)}
+        .sc.sel{border-color:rgba(229,57,53,.5);box-shadow:0 0 15px rgba(229,57,53,.1)}
+        .sc.sel-g{border-color:rgba(76,175,80,.5);box-shadow:0 0 15px rgba(76,175,80,.08)}
+        .sc.sel-w{border-color:rgba(255,179,0,.5);box-shadow:0 0 15px rgba(255,179,0,.08)}
+        .sc.sel-r{border-color:rgba(229,57,53,.5);box-shadow:0 0 15px rgba(229,57,53,.1)}
+        .sc .em{font-size:18px;line-height:1;flex-shrink:0}
+        .sc .ct{flex:1}.sc .ct .t{font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:13px}.sc .ct .d{font-size:11px;color:var(--muted);margin-top:2px}
+        .sc .ck{color:var(--primary);font-size:14px;flex-shrink:0;display:none}
+        .sc.sel .ck,.sc.sel-g .ck,.sc.sel-w .ck,.sc.sel-r .ck{display:inline}
+        .g2{display:grid;grid-template-columns:1fr 1fr;gap:8px}.g3{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px}.g1{display:grid;grid-template-columns:1fr;gap:8px}
+        /* Add row */
+        .ar{display:flex;gap:6px;margin-top:8px}.ar input{flex:1}
+        .ab{padding:10px 14px;background:var(--primary);border:none;border-radius:var(--r);color:#fff;font-size:16px;font-weight:700;cursor:pointer}.ab:disabled{opacity:.3;cursor:not-allowed}
+        /* Biz card */
+        .bc{background:rgba(255,255,255,.02);border:1px solid var(--border);border-radius:var(--r);padding:12px;margin-bottom:8px}
+        .bh{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}.bh span{font-family:'Space Grotesk',sans-serif;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+        .bx{background:none;border:none;color:var(--muted);cursor:pointer;font-size:16px}.bx:hover{color:var(--primary)}
+        .bc input{margin-bottom:6px}
+        .abz{background:none;border:none;color:var(--primary);font-size:13px;font-weight:600;cursor:pointer;padding:4px 0;font-family:'Space Grotesk',sans-serif}.abz:hover{text-decoration:underline}
+        /* Time block */
+        .tb{background:var(--card);border:1px solid rgba(255,255,255,.06);border-radius:var(--r);padding:12px;min-width:0}
+        .tbl{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--text);margin-bottom:8px}
+        .tbi{display:flex;align-items:center;gap:6px}.tbi input[type="time"]{flex:1;min-width:0;padding:8px;font-size:13px}.ts{color:var(--muted);font-size:11px;flex-shrink:0}
+        /* Tone preview */
+        .tp{background:rgba(10,10,15,.6);border:1px solid var(--border);border-radius:var(--r);padding:10px;font-family:'SF Mono','Fira Code',monospace;font-size:11px;color:var(--muted);line-height:1.5;white-space:pre-line;margin-top:8px}
+        /* Agent name */
+        .ani{text-align:center;font-family:'Syne',sans-serif;font-size:28px;font-weight:700;padding:16px}
+        /* Emoji grid */
+        .eg{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;max-width:220px}
+        .eb{aspect-ratio:1;display:flex;align-items:center;justify-content:center;font-size:24px;background:var(--card);border:1px solid rgba(255,255,255,.06);border-radius:var(--r);cursor:pointer;transition:all .2s}.eb:hover{border-color:rgba(229,57,53,.3)}.eb.sel{border-color:rgba(229,57,53,.5);box-shadow:0 0 15px rgba(229,57,53,.1)}
+        /* Priority */
+        .pi{display:flex;align-items:center;gap:10px;background:var(--card);border:1px solid rgba(255,255,255,.06);border-radius:var(--r);padding:10px 14px;margin-bottom:6px}
+        .pn{font-family:'Syne',sans-serif;font-size:14px;font-weight:700;color:var(--primary);width:20px;text-align:center}
+        .pt{font-size:13px;color:var(--text);flex:1}
+        .pa{margin-left:auto;display:flex;gap:4px}.pa button{background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:var(--r);color:var(--muted);cursor:pointer;width:24px;height:24px;font-size:12px;display:flex;align-items:center;justify-content:center}.pa button:hover{color:var(--text);background:rgba(255,255,255,.08)}
+        /* Key validation */
+        .kr{display:flex;gap:8px;align-items:center}.kr input{flex:1}
+        .vb{padding:10px 14px;background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:var(--r);color:var(--muted);font-family:'Space Grotesk',sans-serif;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;transition:all .2s}.vb:hover{background:rgba(255,255,255,.08);color:var(--text)}.vb.loading{opacity:.5;pointer-events:none}.vb.valid{background:rgba(76,175,80,.1);border-color:var(--success);color:var(--success)}
+        .ks{font-size:12px;margin-top:4px}.ks.valid{color:var(--success)}.ks.invalid{color:var(--primary)}
+        .msw{margin-top:8px;display:none}.msw.visible{display:block}
+        /* Telegram */
+        .tgs{background:var(--input);border:1px solid var(--border);border-radius:var(--r);padding:16px;margin-bottom:16px}
+        .tgst{display:flex;gap:10px;margin-bottom:12px;align-items:flex-start}.tgst:last-child{margin-bottom:0}
+        .tgn{width:22px;height:22px;border-radius:50%;background:var(--primary);color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px}
+        .tgt{font-size:13px;color:#d4d4d4;line-height:1.5}.tgt code{background:rgba(255,255,255,.04);padding:1px 5px;border-radius:var(--r);font-family:monospace;color:var(--text);font-size:12px}
+        .tob{display:inline-flex;align-items:center;gap:8px;padding:10px 18px;background:#0088cc;border:none;border-radius:var(--r);color:#fff;font-size:13px;font-weight:600;cursor:pointer;text-decoration:none;transition:opacity .2s;margin-bottom:16px}.tob:hover{opacity:.85}
+        /* Loading */
+        .ls{text-align:center;padding:40px 0}
+        .sp{width:44px;height:44px;border:3px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 20px}
+        @keyframes spin{to{transform:rotate(360deg)}}
+        .lm{font-size:14px;color:var(--muted)}
+        /* Pairing */
+        .pnot{display:flex;align-items:center;gap:10px;background:rgba(255,255,255,.02);border:1px solid var(--primary);border-radius:var(--r);padding:12px 14px;margin-bottom:14px;font-size:13px;color:#d4d4d4}
+        .pnot.ready{border-color:var(--success);background:rgba(76,175,80,.04)}
+        .sps{width:18px;height:18px;border:2px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:spin .8s linear infinite;flex-shrink:0}
+        .pinp{display:flex;gap:8px;margin-top:14px}.pinp input{flex:1;padding:14px;font-size:20px;font-family:monospace;text-align:center;letter-spacing:4px;text-transform:uppercase;border-width:2px}
+        /* Success */
+        .si{width:60px;height:60px;border-radius:50%;background:rgba(76,175,80,.1);border:2px solid var(--success);display:flex;align-items:center;justify-content:center;font-size:26px;margin:0 auto 18px}
+        .sl{display:inline-block;padding:14px 30px;background:var(--primary);border-radius:var(--r);color:#fff;text-decoration:none;font-size:15px;font-weight:600;margin-top:16px;box-shadow:0 0 20px rgba(229,57,53,.15)}.sl:hover{background:var(--primary-h)}
+        .stip{margin-top:18px;padding:14px;background:var(--input);border:1px solid var(--border);border-radius:var(--r);font-size:13px;color:var(--muted);line-height:1.5}
+        /* Status msg */
+        .sm{padding:10px 12px;border-radius:var(--r);font-size:13px;margin-top:10px;display:none}
+        .sm.error{display:block;background:rgba(229,57,53,.08);border:1px solid var(--primary);color:#fca5a5}
+        .sm.info{display:block;background:rgba(255,107,53,.08);border:1px solid var(--secondary);color:#fdba74}
+        .cc{font-size:11px;margin-top:4px;color:var(--muted)}.cc.ok{color:var(--success)}
         /* Responsive */
-        @media (max-width: 480px) {
-            .card { padding: 24px 20px; }
-            .channel-grid { flex-direction: column; }
-            h2 { font-size: 20px; }
-            .hero-text h1 { font-size: 24px; }
-        }
+        @media(max-width:480px){.card{padding:20px 16px}.g2,.g3{grid-template-columns:1fr}h2{font-size:20px}.hero h1{font-size:24px}.ani{font-size:22px}}
     </style>
 </head>
 <body>
-    <div class="wizard">
-        <!-- Progress Bar -->
-        <div class="progress" id="progressBar">
-            <div class="progress-dot active" id="dot1">1</div>
-            <div class="progress-line" id="line1"></div>
-            <div class="progress-dot" id="dot2">2</div>
-            <div class="progress-line" id="line2"></div>
-            <div class="progress-dot" id="dot3">3</div>
-            <div class="progress-line" id="line3"></div>
-            <div class="progress-dot" id="dot4">4</div>
-            <div class="progress-line" id="line4"></div>
-            <div class="progress-dot" id="dot5">5</div>
+    <!-- Progress Bar -->
+    <div class="pb-wrap">
+        <div class="pb-inner">
+            <div class="pb-label">
+                <span class="pb-name" id="pbName">Bem-vindo</span>
+                <span class="pb-pct" id="pbPct">0%</span>
+            </div>
+            <div class="pb-track"><div class="pb-fill" id="pbFill" style="width:0%"></div></div>
         </div>
+    </div>
 
+    <div class="wz">
         <div class="card">
-            <!-- Step 1: Hero -->
-            <div class="step active" id="step1" style="background:linear-gradient(135deg, rgba(220,38,38,0.04), rgba(124,58,237,0.04));border-radius:12px;padding:8px;">
-                <div class="hero-text">
-                    <div style="display:flex;align-items:center;justify-content:center;gap:16px;margin-bottom:24px;">
-                        <img src="https://upload.wikimedia.org/wikipedia/commons/5/5e/Openclaw-logo-text-dark.png"
-                             alt="OpenClaw" style="height:44px;" />
-                        <span style="color:#3a3a3a;font-size:24px;font-weight:300;">+</span>
-                        <img src="https://lurahosting.com.br/images/logo.png"
-                             alt="Lura Hosting" style="height:44px;" />
+            <!-- Step 1: Welcome -->
+            <div class="step active" id="step1">
+                <div class="hero-glow">
+                    <div class="hero">
+                        <div style="display:flex;align-items:center;justify-content:center;gap:16px;margin-bottom:24px">
+                            <img src="https://upload.wikimedia.org/wikipedia/commons/5/5e/Openclaw-logo-text-dark.png" alt="OpenClaw" style="height:44px" />
+                            <span style="color:#3a3a3a;font-size:24px;font-weight:300">+</span>
+                            <img src="https://lurahosting.com.br/images/logo.png" alt="Lura Hosting" style="height:44px" />
+                        </div>
+                        <h1>Comunidade <span class="red">Claw</span> Brasil<br>+ <span class="orange">Lura</span> Hosting</h1>
+                        <p class="sub" style="margin-top:12px">Configure seu assistente pessoal de IA<br>em poucos minutos.</p>
+                        <button class="bf" onclick="goTo(2)">Configurar meu OpenClaw &rarr;</button>
+                        <p class="hero-brand">Powered by <span>bisnishub</span></p>
                     </div>
-                    <h1>Comunidade <span class="red">Claw</span> Brasil<br>+ <span class="purple">Lura</span> Hosting</h1>
-                    <p class="subtitle" style="margin-top:12px;">
-                        Configure seu assistente pessoal de IA<br>em poucos minutos.
-                    </p>
-                    <button class="btn-full" onclick="goTo(2)">
-                        Configurar meu OpenClaw &rarr;
-                    </button>
-                    <p class="hero-brand">Powered by <span>bisnishub</span></p>
                 </div>
             </div>
 
-            <!-- Step 2: Escolher Canal -->
+            <!-- Step 2: API Keys -->
             <div class="step" id="step2">
-                <h2>Escolha o canal</h2>
-                <p class="subtitle">Onde seu assistente de IA vai responder?</p>
-
-                <div class="channel-grid">
-                    <div class="channel-card selected" id="ch-telegram" onclick="selectChannel('telegram')">
-                        <div class="channel-check">&#10003;</div>
-                        <div class="channel-icon">
-                            <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.479.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></svg>
-                        </div>
-                        <div class="channel-name">Telegram</div>
-                    </div>
-                    <div class="channel-card disabled">
-                        <div class="channel-badge">Em breve</div>
-                        <div class="channel-icon">
-                            <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 0 1-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 0 1-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 0 1 2.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0 0 12.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 0 0 5.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 0 0-3.48-8.413z"/></svg>
-                        </div>
-                        <div class="channel-name">WhatsApp</div>
-                    </div>
-                    <div class="channel-card disabled">
-                        <div class="channel-badge">Em breve</div>
-                        <div class="channel-icon">
-                            <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.095 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.095 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/></svg>
-                        </div>
-                        <div class="channel-name">Discord</div>
-                    </div>
-                </div>
-
-                <div class="btn-row">
-                    <button class="btn btn-back" onclick="goTo(1)">Voltar</button>
-                    <button class="btn btn-next" onclick="goTo(3)">Proximo &rarr;</button>
-                </div>
-            </div>
-
-            <!-- Step 3: API Keys -->
-            <div class="step" id="step3">
                 <h2>Chaves de API</h2>
-                <p class="subtitle">Insira pelo menos a chave da Anthropic e valide para escolher o modelo. As demais sao opcionais.</p>
-
-                <div class="form-group">
+                <p class="sub">Insira pelo menos a chave da Anthropic e valide para escolher o modelo.</p>
+                <div class="fg">
                     <label>Anthropic API Key *</label>
-                    <p class="hint">
-                        Obtenha em <a href="https://console.anthropic.com" target="_blank">console.anthropic.com</a><br>
-                        <a href="#" target="_blank" style="color:#7c3aed;">Se voce nao sabe como criar sua chave, assista ao video tutorial</a>
-                    </p>
-                    <div class="key-row">
-                        <input type="text" id="anthropic_key"
-                               placeholder="sk-ant-api03-..."
-                               autocomplete="off" spellcheck="false">
-                        <button type="button" class="validate-btn" id="anthropic_validate" onclick="validateKey('anthropic')">Validar</button>
-                    </div>
-                    <div class="key-status" id="anthropic_status"></div>
-                    <div class="model-select-wrap" id="anthropic_model_wrap">
-                        <label>Modelo</label>
-                        <select class="model-select" id="anthropic_model"></select>
-                    </div>
+                    <p class="hint">Obtenha em <a href="https://console.anthropic.com" target="_blank">console.anthropic.com</a></p>
+                    <div class="kr"><input type="text" id="anthropic_key" placeholder="sk-ant-api03-..." class="mono" autocomplete="off" spellcheck="false"><button type="button" class="vb" id="anthropic_validate" onclick="validateKey('anthropic')">Validar</button></div>
+                    <div class="ks" id="anthropic_status"></div>
+                    <div class="msw" id="anthropic_model_wrap"><label>Modelo</label><select id="anthropic_model"></select></div>
                 </div>
-
-                <div class="form-group">
-                    <label>OpenAI API Key <span style="color:#737373;font-weight:400;">(opcional)</span></label>
-                    <p class="hint">
-                        Obtenha em <a href="https://platform.openai.com/api-keys" target="_blank">platform.openai.com</a>
-                    </p>
-                    <div class="key-row">
-                        <input type="text" id="openai_key"
-                               placeholder="sk-..."
-                               autocomplete="off" spellcheck="false">
-                        <button type="button" class="validate-btn" id="openai_validate" onclick="validateKey('openai')" style="display:none;">Validar</button>
-                    </div>
-                    <div class="key-status" id="openai_status"></div>
-                    <div class="model-select-wrap" id="openai_model_wrap">
-                        <label>Modelo</label>
-                        <select class="model-select" id="openai_model"></select>
-                    </div>
+                <div class="fg">
+                    <label>OpenAI API Key <span style="color:#666;font-weight:400">(opcional)</span></label>
+                    <p class="hint">Obtenha em <a href="https://platform.openai.com/api-keys" target="_blank">platform.openai.com</a></p>
+                    <div class="kr"><input type="text" id="openai_key" placeholder="sk-..." class="mono" autocomplete="off" spellcheck="false"><button type="button" class="vb" id="openai_validate" onclick="validateKey('openai')" style="display:none">Validar</button></div>
+                    <div class="ks" id="openai_status"></div>
+                    <div class="msw" id="openai_model_wrap"><label>Modelo</label><select id="openai_model"></select></div>
                 </div>
-
-                <div class="form-group">
-                    <label>OpenRouter API Key <span style="color:#737373;font-weight:400;">(opcional)</span></label>
-                    <p class="hint">
-                        Obtenha em <a href="https://openrouter.ai/keys" target="_blank">openrouter.ai</a>
-                    </p>
-                    <div class="key-row">
-                        <input type="text" id="openrouter_key"
-                               placeholder="sk-or-v1-..."
-                               autocomplete="off" spellcheck="false">
-                        <button type="button" class="validate-btn" id="openrouter_validate" onclick="validateKey('openrouter')" style="display:none;">Validar</button>
-                    </div>
-                    <div class="key-status" id="openrouter_status"></div>
-                    <div class="model-select-wrap" id="openrouter_model_wrap">
-                        <label>Modelo</label>
-                        <select class="model-select" id="openrouter_model"></select>
-                    </div>
+                <div class="fg">
+                    <label>OpenRouter API Key <span style="color:#666;font-weight:400">(opcional)</span></label>
+                    <p class="hint">Obtenha em <a href="https://openrouter.ai/keys" target="_blank">openrouter.ai</a></p>
+                    <div class="kr"><input type="text" id="openrouter_key" placeholder="sk-or-v1-..." class="mono" autocomplete="off" spellcheck="false"><button type="button" class="vb" id="openrouter_validate" onclick="validateKey('openrouter')" style="display:none">Validar</button></div>
+                    <div class="ks" id="openrouter_status"></div>
+                    <div class="msw" id="openrouter_model_wrap"><label>Modelo</label><select id="openrouter_model"></select></div>
                 </div>
-
-                <div id="step3Error" class="status-msg"></div>
-
-                <div class="btn-row">
-                    <button class="btn btn-back" onclick="goTo(2)">Voltar</button>
-                    <button class="btn btn-next" id="step3Next" onclick="validateStep3()">Proximo &rarr;</button>
-                </div>
+                <div id="step2Error" class="sm"></div>
+                <div class="br"><button class="btn bb" onclick="goTo(1)">Voltar</button><button class="btn bn" id="step2Next" onclick="validateStep2()">Proximo &rarr;</button></div>
             </div>
 
-            <!-- Step 4: Telegram Bot -->
-            <div class="step" id="step4">
-                <h2>Criar Bot no Telegram</h2>
-                <p class="subtitle">Siga as instrucoes abaixo para criar seu bot.</p>
-
-                <div class="tg-steps">
-                    <div class="tg-step">
-                        <div class="tg-num">1</div>
-                        <div class="tg-text">Abra o Telegram e busque <code>BotFather</code> (bot oficial com selo azul)</div>
-                    </div>
-                    <div class="tg-step">
-                        <div class="tg-num">2</div>
-                        <div class="tg-text">Inicie o chat e envie o comando <code>/newbot</code></div>
-                    </div>
-                    <div class="tg-step">
-                        <div class="tg-num">3</div>
-                        <div class="tg-text">Siga as instrucoes para dar um <strong>nome</strong> e <strong>username</strong> ao seu bot</div>
-                    </div>
-                    <div class="tg-step">
-                        <div class="tg-num">4</div>
-                        <div class="tg-text">O BotFather enviara um <strong>token</strong> (sequencia longa de numeros e letras). <strong>Copie-o.</strong></div>
-                    </div>
+            <!-- Step 3: Sobre Voce -->
+            <div class="step" id="step3">
+                <h2>Sobre Voce</h2>
+                <p class="sub">Quanto mais contexto, melhor seu agente te atende.</p>
+                <div class="stitle">Dados Basicos</div>
+                <div class="g2">
+                    <div class="fg"><label>Nome completo *</label><input type="text" id="p_fullName" placeholder="Seu nome completo"></div>
+                    <div class="fg"><label>Como prefere ser chamado</label><input type="text" id="p_nickname" placeholder="Ex: Eduardo, Edu"></div>
                 </div>
+                <div class="fg"><label>Timezone</label>
+                    <select id="p_timezone">
+                        <option value="America/Sao_Paulo">Brasilia (SP/RJ/MG)</option>
+                        <option value="America/Manaus">Manaus (AM)</option>
+                        <option value="America/Recife">Recife (PE)</option>
+                        <option value="America/Fortaleza">Fortaleza (CE)</option>
+                        <option value="America/Belem">Belem (PA)</option>
+                        <option value="America/Cuiaba">Cuiaba (MT)</option>
+                        <option value="America/Porto_Velho">Porto Velho (RO)</option>
+                        <option value="America/Rio_Branco">Rio Branco (AC)</option>
+                        <option value="other">Outro</option>
+                    </select>
+                    <input type="text" id="p_timezoneCustom" placeholder="Ex: Europe/Lisbon" style="display:none;margin-top:6px">
+                </div>
+                <div class="stitle">Quem e Voce</div>
+                <div class="fg">
+                    <textarea id="p_aboutYou" rows="5" placeholder="Me conta em 2-3 paragrafos: o que voce faz, seu negocio, sua historia..."></textarea>
+                    <div class="cc" id="aboutCount">0 caracteres</div>
+                </div>
+                <div class="stitle">Seus Negocios / Projetos</div>
+                <div id="bizList"></div>
+                <button class="abz" onclick="addBiz()">+ Adicionar negocio</button>
+                <div class="stitle">Seus Valores <span style="font-weight:400;font-size:11px;color:var(--muted)">(<span id="valCount">0</span>/5)</span></div>
+                <div class="g2" id="valGrid"></div>
+                <div class="ar"><input type="text" id="customVal" placeholder="Outro valor..."><button class="ab" onclick="addCustomVal()">+</button></div>
+                <div class="br"><button class="btn bb" onclick="goTo(2)">Voltar</button><button class="btn bn" onclick="goTo(4)">Proximo &rarr;</button></div>
+            </div>
 
-                <a href="https://t.me/BotFather" target="_blank" class="tg-open-btn">
-                    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style="width:16px;height:16px;fill:white;flex-shrink:0;"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.479.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></svg>
+            <!-- Step 4: Estilo de Trabalho -->
+            <div class="step" id="step4">
+                <h2>Seu Estilo de Trabalho</h2>
+                <p class="sub">Seu agente precisa saber seu ritmo.</p>
+                <div class="stitle">Comunicacao</div>
+                <p style="font-size:12px;color:var(--muted);margin-bottom:8px">Como gosta de receber informacao?</p>
+                <div class="g2" id="commGrid"></div>
+                <div class="stitle">Horarios</div>
+                <div class="g3" id="timeBlocks">
+                    <div class="tb"><div class="tbl">&#128263; Silencio</div><div class="tbi"><input type="time" id="t_sil_from" value="22:00"><span class="ts">ate</span><input type="time" id="t_sil_to" value="07:00"></div></div>
+                    <div class="tb"><div class="tbl">&#127919; Foco</div><div class="tbi"><input type="time" id="t_foc_from" value="09:00"><span class="ts">ate</span><input type="time" id="t_foc_to" value="12:00"></div></div>
+                    <div class="tb"><div class="tbl">&#128276; Notificacoes</div><div class="tbi"><input type="time" id="t_not_from" value="08:00"><span class="ts">ate</span><input type="time" id="t_not_to" value="20:00"></div></div>
+                </div>
+                <div class="stitle">Seus Desafios</div>
+                <div class="g2" id="chalGrid"></div>
+                <div class="ar"><input type="text" id="customChal" placeholder="Outro desafio..."><button class="ab" onclick="addCustomChal()">+</button></div>
+                <div class="stitle">Ferramentas que ja usa</div>
+                <div class="g2" id="toolGrid"></div>
+                <div class="ar"><input type="text" id="customTool" placeholder="Outra ferramenta..."><button class="ab" onclick="addCustomTool()">+</button></div>
+                <div class="br"><button class="btn bb" onclick="goTo(3)">Voltar</button><button class="btn bn" onclick="goTo(5)">Proximo &rarr;</button></div>
+            </div>
+
+            <!-- Step 5: Seu Perfil -->
+            <div class="step" id="step5">
+                <h2>Seu Perfil</h2>
+                <p class="sub">Isso define quais superpoderes seu agente vai ter.</p>
+                <div class="stitle">Perfil Principal</div>
+                <div class="g2" id="profGrid"></div>
+                <div id="priSection" style="display:none">
+                    <div class="stitle">Prioridades <span style="font-weight:400;font-size:11px;color:var(--muted)">(use setas para reordenar)</span></div>
+                    <div id="priList"></div>
+                </div>
+                <div class="br"><button class="btn bb" onclick="goTo(4)">Voltar</button><button class="btn bn" onclick="goTo(6)">Proximo &rarr;</button></div>
+            </div>
+
+            <!-- Step 6: De Vida ao Agente -->
+            <div class="step" id="step6">
+                <h2>De Vida ao Seu Agente</h2>
+                <p class="sub">Escolha nome, personalidade e aparencia.</p>
+                <div class="stitle">Nome do Agente</div>
+                <div style="text-align:center"><input type="text" id="p_agentName" class="ani" placeholder="Clawdete"></div>
+                <p style="font-size:11px;color:var(--muted);text-align:center;margin-top:4px">Escolha um nome que voce se sinta confortavel chamando</p>
+                <div class="stitle">Genero</div>
+                <div class="g3" id="genderGrid"></div>
+                <div class="stitle">Emoji</div>
+                <div class="eg" id="emojiGrid"></div>
+                <div class="ar" style="max-width:220px"><input type="text" id="customEmoji" placeholder="Outro..." maxlength="4"><button class="ab" onclick="setCustomEmoji()">OK</button></div>
+                <div class="stitle">Papel Principal</div>
+                <div class="g2" id="roleGrid"></div>
+                <div id="customRoleWrap" style="display:none;margin-top:8px"><textarea id="p_customRole" rows="3" placeholder="Descreva o papel ideal para seu agente..."></textarea></div>
+                <div class="stitle">Background / Historia</div>
+                <textarea id="p_background" rows="4" placeholder="Ex: Nasceu no Workshop OpenClaw Brasil. Foi treinada pra ser o braco direito de um empreendedor..."></textarea>
+                <p style="font-size:11px;color:var(--muted);margin-top:4px">Pode ser ficticio! O importante e ser coerente com o papel.</p>
+                <div class="br"><button class="btn bb" onclick="goTo(5)">Voltar</button><button class="btn bn" onclick="goTo(7)">Proximo &rarr;</button></div>
+            </div>
+
+            <!-- Step 7: Personalidade -->
+            <div class="step" id="step7">
+                <h2>Personalidade do Agente</h2>
+                <p class="sub">Personalidade forte = agente util. Generico = chatbot qualquer.</p>
+                <div class="stitle">Tom de Voz</div>
+                <div class="g2" id="toneGrid"></div>
+                <div class="stitle">Anti-Patterns <span style="font-weight:400;font-size:11px;color:var(--muted)">— O que te IRRITA?</span></div>
+                <div class="g1" id="antiGrid"></div>
+                <div class="ar"><input type="text" id="customAnti" placeholder="Outro..."><button class="ab" onclick="addCustomAnti()">+</button></div>
+                <div class="stitle">Comportamentos Desejados <span style="font-weight:400;font-size:11px;color:var(--muted)">— O que voce VALORIZA?</span></div>
+                <div class="g1" id="behGrid"></div>
+                <div class="ar"><input type="text" id="customBeh" placeholder="Outro..."><button class="ab" onclick="addCustomBeh()">+</button></div>
+                <div class="br"><button class="btn bb" onclick="goTo(6)">Voltar</button><button class="btn bn" onclick="goTo(8)">Proximo &rarr;</button></div>
+            </div>
+
+            <!-- Step 8: Regras -->
+            <div class="step" id="step8">
+                <h2>Regras do Agente</h2>
+                <p class="sub">Defina o que ele pode fazer sozinho.</p>
+                <div class="stitle">Livre pra Fazer</div>
+                <div class="g2" id="freeGrid"></div>
+                <div class="stitle">Precisa Perguntar Antes</div>
+                <div class="g2" id="askGrid"></div>
+                <div class="stitle">Frequencia de Heartbeats</div>
+                <div class="g2" id="hbFreqGrid" style="grid-template-columns:repeat(5,1fr)"></div>
+                <p style="font-size:11px;color:var(--muted);margin-top:4px" id="hbCost">~R$0,04/heartbeat. A cada 4h = 6x/dia = ~R$7/mes</p>
+                <div class="stitle">O que Checar no Heartbeat</div>
+                <div class="g2" id="hbCheckGrid"></div>
+                <div class="br"><button class="btn bb" onclick="goTo(7)">Voltar</button><button class="btn bn" onclick="goTo(9)">Proximo &rarr;</button></div>
+            </div>
+
+            <!-- Step 9: Telegram Bot -->
+            <div class="step" id="step9">
+                <h2>Criar Bot no Telegram</h2>
+                <p class="sub">Siga as instrucoes abaixo para criar seu bot.</p>
+                <div class="tgs">
+                    <div class="tgst"><div class="tgn">1</div><div class="tgt">Abra o Telegram e busque <code>BotFather</code> (bot oficial com selo azul)</div></div>
+                    <div class="tgst"><div class="tgn">2</div><div class="tgt">Inicie o chat e envie o comando <code>/newbot</code></div></div>
+                    <div class="tgst"><div class="tgn">3</div><div class="tgt">Siga as instrucoes para dar um <strong>nome</strong> e <strong>username</strong> ao seu bot</div></div>
+                    <div class="tgst"><div class="tgn">4</div><div class="tgt">O BotFather enviara um <strong>token</strong>. <strong>Copie-o.</strong></div></div>
+                </div>
+                <a href="https://t.me/BotFather" target="_blank" class="tob">
+                    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style="width:16px;height:16px;fill:#fff;flex-shrink:0"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.479.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></svg>
                     Abrir BotFather no Telegram
                 </a>
-
-                <div class="form-group">
-                    <label>Bot Token *</label>
-                    <p class="hint">Cole o token que o BotFather enviou</p>
-                    <input type="text" id="telegram_token"
-                           placeholder="1234567890:ABCdefGHIjklMNOpqrsTUVwxyz"
-                           autocomplete="off" spellcheck="false">
-                </div>
-
-                <div id="step4Error" class="status-msg"></div>
-
-                <div class="btn-row">
-                    <button class="btn btn-back" onclick="goTo(3)">Voltar</button>
-                    <button class="btn btn-next" onclick="validateStep4()">Implantar &rarr;</button>
-                </div>
+                <div class="fg"><label>Bot Token *</label><p class="hint">Cole o token que o BotFather enviou</p><input type="text" id="telegram_token" class="mono" placeholder="1234567890:ABCdefGHIjklMNOpqrsTUVwxyz" autocomplete="off" spellcheck="false"></div>
+                <div id="step9Error" class="sm"></div>
+                <div class="br"><button class="btn bb" onclick="goTo(8)">Voltar</button><button class="btn bn" onclick="validateStep9()">Implantar &rarr;</button></div>
             </div>
 
-            <!-- Step 5: Loading/Deploy -->
-            <div class="step" id="step5">
-                <div class="loading-steps">
-                    <div class="spinner"></div>
-                    <div class="loading-msg" id="loadingMsg">Configurando sua instancia...</div>
-                </div>
-                <div id="step5Error" class="status-msg"></div>
+            <!-- Step 10: Deploy -->
+            <div class="step" id="step10">
+                <div class="ls"><div class="sp"></div><div class="lm" id="loadingMsg">Configurando sua instancia...</div></div>
+                <div id="step10Error" class="sm"></div>
             </div>
 
-            <!-- Step 6: Pairing (shown after step5 finishes, uses dot5) -->
-            <div class="step" id="step6">
+            <!-- Step 11: Pairing -->
+            <div class="step" id="step11">
                 <h2>Conectar seu Telegram</h2>
-                <p class="subtitle">Seu bot esta ativo! Agora vamos conectar voce para que somente voce possa conversar com ele.</p>
-
-                <div class="tg-steps">
-                    <div class="tg-step">
-                        <div class="tg-num">1</div>
-                        <div class="tg-text">Abra o Telegram e busque pelo nome do seu bot</div>
-                    </div>
-                    <div class="tg-step">
-                        <div class="tg-num">2</div>
-                        <div class="tg-text">Clique em <strong>Iniciar</strong> (ou envie <strong>/start</strong>)</div>
-                    </div>
-                    <div class="tg-step">
-                        <div class="tg-num">3</div>
-                        <div class="tg-text">Envie qualquer mensagem (ex: <strong>oi</strong>)</div>
-                    </div>
-                    <div class="tg-step">
-                        <div class="tg-num">4</div>
-                        <div class="tg-text">O bot vai responder com um <strong>codigo de 8 caracteres</strong></div>
-                    </div>
-                    <div class="tg-step">
-                        <div class="tg-num">5</div>
-                        <div class="tg-text">Digite o codigo abaixo para liberar o acesso</div>
-                    </div>
+                <p class="sub">Seu bot esta ativo! Agora vamos conectar voce.</p>
+                <div class="tgs">
+                    <div class="tgst"><div class="tgn">1</div><div class="tgt">Abra o Telegram e busque pelo nome do seu bot</div></div>
+                    <div class="tgst"><div class="tgn">2</div><div class="tgt">Clique em <strong>Iniciar</strong> (ou envie <strong>/start</strong>)</div></div>
+                    <div class="tgst"><div class="tgn">3</div><div class="tgt">Envie qualquer mensagem (ex: <strong>oi</strong>)</div></div>
+                    <div class="tgst"><div class="tgn">4</div><div class="tgt">O bot vai responder com um <strong>codigo de 8 caracteres</strong></div></div>
+                    <div class="tgst"><div class="tgn">5</div><div class="tgt">Digite o codigo abaixo</div></div>
                 </div>
-
-                <div class="pairing-notice" id="pairingNotice">
-                    <div class="spinner-small"></div>
-                    <span>Aguarde <strong id="pairingCountdown">15</strong>s para o bot ficar online no Telegram...</span>
-                </div>
-
-                <div class="pairing-input" id="pairingInputArea" style="opacity:0.4;pointer-events:none;">
-                    <input type="text" id="pairing_code" maxlength="8"
-                           placeholder="ABCD1234" autocomplete="off"
-                           style="text-transform:uppercase;letter-spacing:4px;text-align:center;font-size:20px;">
-                </div>
-
-                <div id="step6Error" class="status-msg"></div>
-                <div id="step6Info" class="status-msg"></div>
-
-                <button class="btn-full" id="pairingBtn" onclick="submitPairing()" disabled>
-                    Confirmar Pareamento
-                </button>
-
-                <div id="pairingRetry" style="display:none;text-align:center;margin-top:12px;">
-                    <p style="color:#a3a3a3;font-size:13px;margin-bottom:8px;">
-                        Nao recebeu o codigo? Envie outra mensagem para o bot e aguarde alguns segundos.
-                    </p>
-                </div>
-
-                <p style="text-align:center;margin-top:12px;">
-                    <a href="#" onclick="skipPairing()" style="color:#737373;font-size:12px;text-decoration:none;">
-                        Pular esta etapa (configurar depois)
-                    </a>
-                </p>
+                <div class="pnot" id="pairingNotice"><div class="sps"></div><span>Aguarde <strong id="pairingCountdown">15</strong>s para o bot ficar online...</span></div>
+                <div class="pinp" id="pairingInputArea" style="opacity:.4;pointer-events:none"><input type="text" id="pairing_code" maxlength="8" placeholder="ABCD1234" autocomplete="off"></div>
+                <div id="step11Error" class="sm"></div>
+                <div id="step11Info" class="sm"></div>
+                <button class="bf" id="pairingBtn" onclick="submitPairing()" disabled>Confirmar Pareamento</button>
+                <div id="pairingRetry" style="display:none;text-align:center;margin-top:12px"><p style="color:var(--muted);font-size:13px">Nao recebeu o codigo? Envie outra mensagem para o bot.</p></div>
+                <p style="text-align:center;margin-top:12px"><a href="#" onclick="skipPairing()" style="color:#666;font-size:12px;text-decoration:none">Pular esta etapa (configurar depois)</a></p>
             </div>
 
-            <!-- Step 7: Success -->
-            <div class="step" id="step7">
-                <div style="text-align:center;">
-                    <div class="success-icon">&#10003;</div>
+            <!-- Step 12: Success -->
+            <div class="step" id="step12">
+                <div style="text-align:center">
+                    <div class="si">&#10003;</div>
                     <h2>Tudo pronto!</h2>
-                    <p class="subtitle">Seu OpenClaw esta configurado e funcionando no Telegram!</p>
-
-                    <p style="font-size:14px;color:#d4d4d4;margin-bottom:8px;line-height:1.6;">
-                        O OpenClaw agora so responde a <strong>voce</strong>. Basta conversar com seu bot no Telegram para usar seu agente de IA.
-                    </p>
-
-                    <p style="font-size:13px;color:#a3a3a3;margin-bottom:20px;line-height:1.6;">
-                        Voce pode acessar o Dashboard do seu OpenClaw atraves do link abaixo, mas todas as configuracoes podem ser realizadas direto pelo Telegram conversando com o seu agente OpenClaw.
-                    </p>
-
-                    <a id="dashboardLink" href="#" class="success-link" target="_blank">
-                        Acessar Dashboard &rarr;
-                    </a>
-
-                    <div class="success-tip">
-                        <strong>Dica:</strong> Pelo Telegram voce pode configurar skills, prompts, modelos e muito mais. Basta pedir ao seu agente!
-                    </div>
+                    <p class="sub">Seu OpenClaw esta configurado e funcionando no Telegram!</p>
+                    <p style="font-size:14px;color:#d4d4d4;margin-bottom:8px;line-height:1.6">O OpenClaw agora so responde a <strong>voce</strong>. Basta conversar com seu bot no Telegram.</p>
+                    <p style="font-size:13px;color:var(--muted);margin-bottom:20px;line-height:1.6">Voce pode acessar o Dashboard pelo link abaixo, mas todas as configuracoes podem ser feitas direto pelo Telegram.</p>
+                    <a id="dashboardLink" href="#" class="sl" target="_blank">Acessar Dashboard &rarr;</a>
+                    <div class="stip"><strong>Dica:</strong> Pelo Telegram voce pode configurar skills, prompts, modelos e muito mais!</div>
                 </div>
             </div>
         </div>
     </div>
 
     <script>
-        let currentStep = 1;
-        const totalDots = 5;
-        let setupData = {};
+    let currentStep=1;const TOTAL=12;let setupData={};
+    // Persona state
+    const P={
+        values:[],businesses:[{name:'',description:''}],commStyle:'',challenges:[],tools:[],
+        profile:'',priorities:[],gender:'female',emoji:'🦞',customEmoji:'',role:'',
+        tone:'',antiPatterns:[],desiredBehaviors:[],freeActions:[],askActions:[],
+        hbFreq:'4h',hbChecks:[]
+    };
+    const STEP_NAMES=['','Bem-vindo','Chaves de API','Sobre Voce','Estilo de Trabalho','Seu Perfil','Seu Agente','Personalidade','Regras','Canal Telegram','Implantando...','Pareamento','Sucesso'];
 
-        function goTo(step) {
-            document.getElementById('step' + currentStep).classList.remove('active');
-            currentStep = step;
-            document.getElementById('step' + currentStep).classList.add('active');
-            updateProgress();
-        }
+    function goTo(s){document.getElementById('step'+currentStep).classList.remove('active');currentStep=s;document.getElementById('step'+currentStep).classList.add('active');updatePB()}
+    function updatePB(){const pct=Math.round(((currentStep-1)/(TOTAL-1))*100);document.getElementById('pbFill').style.width=pct+'%';document.getElementById('pbPct').textContent=pct+'%';document.getElementById('pbName').textContent=STEP_NAMES[currentStep]||''}
 
-        function updateProgress() {
-            for (let i = 1; i <= totalDots; i++) {
-                const dot = document.getElementById('dot' + i);
-                const line = document.getElementById('line' + (i - 1));
-                dot.classList.remove('active', 'done');
-                if (line) line.classList.remove('done');
+    // ── Data definitions ──
+    const VALUES_OPT=[
+        {e:'💰',l:'Negocios enxutos e lucrativos'},{e:'⚙️',l:'Automacao > trabalho manual'},{e:'📚',l:'Educacao acessivel'},
+        {e:'👨‍👩‍👧‍👦',l:'Familia primeiro'},{e:'🔍',l:'Transparencia radical'},{e:'📊',l:'Dados e metricas > achismo'},
+        {e:'✅',l:'Feito > perfeito'},{e:'🌱',l:'Bootstrap > investimento externo'},{e:'🤝',l:'Networking e comunidade'}
+    ];
+    const COMM_OPT=[
+        {id:'direct',e:'🎯',t:'Direto ao ponto',d:'Bullet points, zero enrolacao, respostas curtas'},
+        {id:'data',e:'📊',t:'Com dados',d:'Numeros, metricas, evidencias concretas'},
+        {id:'detailed',e:'📝',t:'Detalhado',d:'Contexto completo, analise profunda'},
+        {id:'conversational',e:'💬',t:'Conversacional',d:'Como um colega de trabalho, tom informal'}
+    ];
+    const CHAL_OPT=[
+        {e:'🧠',l:'TDAH / dificuldade de foco'},{e:'📱',l:'Sobrecarga de mensagens'},{e:'📋',l:'Procrastino tarefas administrativas'},
+        {e:'🤝',l:'Aceito projetos demais'},{e:'⏰',l:'Ma gestao de tempo'},{e:'💡',l:'Muitas ideias, pouca execucao'},{e:'😰',l:'Sobrecarga de decisoes'}
+    ];
+    const TOOLS_OPT=['Google Workspace','Telegram','WhatsApp Business','Notion','Trello','YouTube','Instagram','LinkedIn','Slack','GitHub','Stripe','WordPress','Canva'];
+    const PROF_OPT=[
+        {id:'entrepreneur',e:'👔',t:'EMPREENDEDOR / FOUNDER',d:'Foco em operacoes, metricas, decisoes estrategicas'},
+        {id:'creator',e:'🎨',t:'CRIADOR DE CONTEUDO',d:'Foco em producao, redes sociais, design, edicao'},
+        {id:'developer',e:'💻',t:'DESENVOLVEDOR',d:'Foco em codigo, CI/CD, deploy, monitoramento'},
+        {id:'productivity',e:'📅',t:'PRODUTIVIDADE PESSOAL',d:'Foco em agenda, tarefas, organizacao'}
+    ];
+    const PRI_MAP={
+        entrepreneur:['Metricas de receita e crescimento','Gestao de time e delegacao','Decisoes estrategicas','Automacao de processos','Networking e parcerias'],
+        creator:['Calendario editorial consistente','Qualidade do conteudo','Crescimento de audiencia','Monetizacao','Produtividade na criacao'],
+        developer:['Qualidade do codigo','Deploy e CI/CD confiavel','Monitoramento e alertas','Documentacao','Automacao de tarefas repetitivas'],
+        productivity:['Organizacao da agenda','Priorizacao de tarefas','Reduzir distracoes','Habitos saudaveis','Gestao de emails']
+    };
+    const GENDERS=[{id:'female',l:'Feminino'},{id:'male',l:'Masculino'},{id:'neutral',l:'Neutro'}];
+    const EMOJIS=['🦞','🤖','🧠','⚡','🔮','🎯','🦾','💎','🌟','🔥','🚀','🐺'];
+    const ROLES=[
+        {id:'coo',e:'🤝',t:'Braco Direito / COO',d:'Coordena, organiza, cobra, antecipa'},
+        {id:'strategist',e:'🧠',t:'Estrategista',d:'Analisa, pesquisa, sugere, planeja'},
+        {id:'executor',e:'⚡',t:'Executora',d:'Faz, automatiza, entrega, resolve'},
+        {id:'assistant',e:'🎯',t:'Assistente Executiva',d:'Agenda, emails, organizacao, follow-ups'},
+        {id:'custom',e:'✍️',t:'Personalizado',d:'Descreva o papel ideal'}
+    ];
+    const TONES=[
+        {id:'direct',e:'🎯',t:'DIRETO E PROFISSIONAL',p:'Reuniao com Joao amanha 14h. Pauta: pricing Q2.\\nQuer que eu prepare o deck?'},
+        {id:'casual',e:'😎',t:'CASUAL E DESCONTRAIDO',p:'Opa! Tem call com o Joao amanha 14h sobre pricing.\\nMando preparar o material?'},
+        {id:'executive',e:'👔',t:'EXECUTIVO E ESTRATEGICO',p:'Compromisso confirmado: reuniao pricing Q2 com Joao,\\namanha 14h. Recomendo revisarmos margens antes.'},
+        {id:'proactive',e:'🔥',t:'PROATIVO E INTENSO',p:'ATENCAO: Call Joao amanha 14h — pricing Q2. Ja puxei\\nos numeros. Margens cairam 3%. Sugiro ajustar ANTES.'}
+    ];
+    const ANTI_OPT=[
+        {e:'😤',l:'Elogios vazios — "Otima pergunta!", "Fico feliz em ajudar!"'},{e:'📚',l:'Textao pra pergunta de sim ou nao'},
+        {e:'🤷',l:'Inventar dados quando nao sabe'},{e:'🔁',l:'Repetir o que eu disse em vez de avancar'},
+        {e:'🐌',l:'Ser passivo — esperar eu pedir tudo'},{e:'🌫️',l:'Respostas genericas pra qualquer pessoa'},{e:'💬',l:'Perguntar demais antes de agir'}
+    ];
+    const BEH_OPT=['Sugerir proximos passos sempre','Cobrar pendencias no ar','Antecipar problemas','Confirmar antes de enviar algo externo','Dar opiniao propria mesmo discordando','Bullet points pra info rapida','Registrar licoes automaticamente','Usar humor quando faz sentido'];
+    const FREE_OPT=['Ler arquivos e organizar workspace','Pesquisar na web','Consultar agenda e emails','Organizar memoria e consolidar notas','Executar crons e heartbeats','Responder emails simples/rotineiros','Atualizar Notion/Trello automaticamente','Criar posts em rascunho','Reorganizar minha agenda'];
+    const ASK_OPT=['Enviar emails, mensagens, posts publicos','Agendar reunioes com terceiros','Gastar dinheiro (APIs pagas)','Deletar ou modificar arquivos criticos','Responder clientes','Tomar decisoes de negocio','Alterar configuracoes do sistema'];
+    const HB_FREQ=['2h','4h','6h','8h','12h'];
+    const HB_CHECKS=['Compromissos nas proximas 24-48h','Crons — todos rodaram?','Emails urgentes','Tarefas com prazo proximo','Metricas do negocio','Pendencias sem resposta ha 48h+'];
 
-                if (i < getProgressDot()) {
-                    dot.classList.add('done');
-                    dot.innerHTML = '&#10003;';
-                    if (line) line.classList.add('done');
-                } else if (i === getProgressDot()) {
-                    dot.classList.add('active');
-                    dot.textContent = i;
-                } else {
-                    dot.textContent = i;
-                }
-            }
-        }
+    // ── Render helpers ──
+    function ha(s){return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;')}
+    function he(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+    function mkCard(cont,emoji,title,desc,cls){return `<button class="sc ${cls}" onclick="${ha(cont)}"><span class="em">${emoji}</span><div class="ct"><div class="t">${he(title)}</div>${desc?'<div class="d">'+he(desc)+'</div>':''}</div><span class="ck">✓</span></button>`}
+    function mkChip(cont,emoji,label,cls){return `<button class="sc ${cls}" onclick="${ha(cont)}"><span class="em">${emoji||'☐'}</span><span class="ct"><span class="t">${he(label)}</span></span><span class="ck">✓</span></button>`}
 
-        function getProgressDot() {
-            // Map steps 1-7 to dots 1-5
-            if (currentStep <= 1) return 1;
-            if (currentStep <= 2) return 2;
-            if (currentStep <= 3) return 3;
-            if (currentStep <= 4) return 4;
-            return 5; // steps 5,6,7 all use dot 5
-        }
+    // ── Toggle logic ──
+    function toggleArr(arr,val){const i=arr.indexOf(val);if(i>=0)arr.splice(i,1);else arr.push(val);return arr}
 
-        function selectChannel(ch) {
-            // Only telegram is selectable for now
-        }
+    // ── Step 3: Values ──
+    function renderVals(){
+        const g=document.getElementById('valGrid');
+        g.innerHTML=VALUES_OPT.map(v=>mkChip(`toggleVal('${v.l.replace(/'/g,"\\'")}')`,v.e,v.l,P.values.includes(v.l)?'sel':'')).join('');
+        // Add custom vals
+        P.values.filter(v=>!VALUES_OPT.find(o=>o.l===v)).forEach(v=>{g.innerHTML+=mkChip(`toggleVal('${v.replace(/'/g,"\\'")}')`,'+',v,'sel')});
+        document.getElementById('valCount').textContent=P.values.length;
+    }
+    function toggleVal(v){if(!P.values.includes(v)&&P.values.length>=5)return;toggleArr(P.values,v);renderVals()}
+    function addCustomVal(){const el=document.getElementById('customVal');const v=el.value.trim();if(v&&P.values.length<5&&!P.values.includes(v)){P.values.push(v);el.value='';renderVals()}}
 
-        // Mostrar botao Validar quando digita
-        ['openai', 'openrouter'].forEach(p => {
-            document.getElementById(p + '_key').addEventListener('input', function() {
-                const btn = document.getElementById(p + '_validate');
-                btn.style.display = this.value.trim() ? 'block' : 'none';
-                // Esconder modelo se chave mudou
-                document.getElementById(p + '_model_wrap').classList.remove('visible');
-                document.getElementById(p + '_status').textContent = '';
-                document.getElementById(p + '_validate').classList.remove('valid');
-            });
+    // ── Step 3: Businesses ──
+    function renderBiz(){
+        const c=document.getElementById('bizList');
+        c.innerHTML=P.businesses.map((b,i)=>`<div class="bc"><div class="bh"><span>Negocio ${i+1}</span>${P.businesses.length>1?`<button class="bx" onclick="rmBiz(${i})">✕</button>`:''}</div><input type="text" value="${esc(b.name)}" placeholder="Nome do negocio" onchange="P.businesses[${i}].name=this.value"><input type="text" value="${esc(b.description)}" placeholder="Descricao curta" onchange="P.businesses[${i}].description=this.value"></div>`).join('');
+    }
+    function addBiz(){if(P.businesses.length<5){P.businesses.push({name:'',description:''});renderBiz()}}
+    function rmBiz(i){if(P.businesses.length>1){P.businesses.splice(i,1);renderBiz()}}
+    function esc(s){return(s||'').replace(/"/g,'&quot;').replace(/</g,'&lt;')}
+
+    // ── Step 4: Communication ──
+    function renderComm(){
+        document.getElementById('commGrid').innerHTML=COMM_OPT.map(c=>mkCard(`setComm('${c.id}')`,c.e,c.t,c.d,P.commStyle===c.id?'sel':'')).join('');
+    }
+    function setComm(id){P.commStyle=id;renderComm()}
+
+    // ── Step 4: Challenges ──
+    function renderChal(){
+        const g=document.getElementById('chalGrid');
+        g.innerHTML=CHAL_OPT.map(c=>mkChip(`toggleChal('${c.l.replace(/'/g,"\\'")}')`,c.e,c.l,P.challenges.includes(c.l)?'sel':'')).join('');
+        P.challenges.filter(c=>!CHAL_OPT.find(o=>o.l===c)).forEach(c=>{g.innerHTML+=mkChip(`toggleChal('${c.replace(/'/g,"\\'")}')`,'+',c,'sel')});
+    }
+    function toggleChal(v){toggleArr(P.challenges,v);renderChal()}
+    function addCustomChal(){const el=document.getElementById('customChal');const v=el.value.trim();if(v&&!P.challenges.includes(v)){P.challenges.push(v);el.value='';renderChal()}}
+
+    // ── Step 4: Tools ──
+    function renderTools(){
+        const g=document.getElementById('toolGrid');
+        g.innerHTML=TOOLS_OPT.map(t=>mkChip(`toggleTool('${t.replace(/'/g,"\\'")}')`,P.tools.includes(t)?'✓':'',t,P.tools.includes(t)?'sel':'')).join('');
+        P.tools.filter(t=>!TOOLS_OPT.includes(t)).forEach(t=>{g.innerHTML+=mkChip(`toggleTool('${t.replace(/'/g,"\\'")}')`,'+',t,'sel')});
+    }
+    function toggleTool(v){toggleArr(P.tools,v);renderTools()}
+    function addCustomTool(){const el=document.getElementById('customTool');const v=el.value.trim();if(v&&!P.tools.includes(v)){P.tools.push(v);el.value='';renderTools()}}
+
+    // ── Step 5: Profile ──
+    function renderProf(){
+        document.getElementById('profGrid').innerHTML=PROF_OPT.map(p=>mkCard(`setProf('${p.id}')`,p.e,p.t,p.d,P.profile===p.id?'sel':'')).join('');
+    }
+    function setProf(id){P.profile=id;P.priorities=[...(PRI_MAP[id]||[])];renderProf();renderPri()}
+    function renderPri(){
+        const s=document.getElementById('priSection');
+        if(!P.priorities.length){s.style.display='none';return}
+        s.style.display='block';
+        document.getElementById('priList').innerHTML=P.priorities.map((p,i)=>`<div class="pi"><span class="pn">${i+1}</span><span class="pt">${p}</span><div class="pa"><button onclick="movePri(${i},-1)" ${i===0?'disabled':''}>&#9650;</button><button onclick="movePri(${i},1)" ${i===P.priorities.length-1?'disabled':''}>&#9660;</button></div></div>`).join('');
+    }
+    function movePri(i,d){const j=i+d;if(j<0||j>=P.priorities.length)return;[P.priorities[i],P.priorities[j]]=[P.priorities[j],P.priorities[i]];renderPri()}
+
+    // ── Step 6: Gender, Emoji, Role ──
+    function renderGender(){
+        document.getElementById('genderGrid').innerHTML=GENDERS.map(g=>`<button class="sc ${P.gender===g.id?'sel':''}" onclick="P.gender='${g.id}';renderGender()" style="justify-content:center"><span class="ct"><span class="t" style="text-align:center">${g.l}</span></span><span class="ck">✓</span></button>`).join('');
+    }
+    function renderEmoji(){
+        document.getElementById('emojiGrid').innerHTML=EMOJIS.map(e=>`<button class="eb ${P.emoji===e?'sel':''}" onclick="P.emoji='${e}';P.customEmoji='';renderEmoji()">${e}</button>`).join('');
+    }
+    function setCustomEmoji(){const v=document.getElementById('customEmoji').value.trim();if(v){P.emoji=v;P.customEmoji=v;renderEmoji()}}
+    function renderRole(){
+        document.getElementById('roleGrid').innerHTML=ROLES.map(r=>mkCard(`setRole('${r.id}')`,r.e,r.t,r.d,P.role===r.id?'sel':'')).join('');
+        document.getElementById('customRoleWrap').style.display=P.role==='custom'?'block':'none';
+    }
+    function setRole(id){P.role=id;renderRole()}
+
+    // ── Step 7: Tone, Anti, Beh ──
+    function renderTone(){
+        document.getElementById('toneGrid').innerHTML=TONES.map(t=>`<button class="sc ${P.tone===t.id?'sel':''}" onclick="P.tone='${t.id}';renderTone()"><span class="em">${t.e}</span><div class="ct"><div class="t">${t.t}</div><div class="tp">${t.p}</div></div><span class="ck">✓</span></button>`).join('');
+    }
+    function renderAnti(){
+        const g=document.getElementById('antiGrid');
+        g.innerHTML=ANTI_OPT.map(a=>mkChip(`toggleAnti('${a.l.replace(/'/g,"\\'")}')`,a.e,a.l,P.antiPatterns.includes(a.l)?'sel-r':'')).join('');
+        P.antiPatterns.filter(a=>!ANTI_OPT.find(o=>o.l===a)).forEach(a=>{g.innerHTML+=mkChip(`toggleAnti('${a.replace(/'/g,"\\'")}')`,'+',a,'sel-r')});
+    }
+    function toggleAnti(v){toggleArr(P.antiPatterns,v);renderAnti()}
+    function addCustomAnti(){const el=document.getElementById('customAnti');const v=el.value.trim();if(v&&!P.antiPatterns.includes(v)){P.antiPatterns.push(v);el.value='';renderAnti()}}
+    function renderBeh(){
+        const g=document.getElementById('behGrid');
+        g.innerHTML=BEH_OPT.map(b=>mkChip(`toggleBeh('${b.replace(/'/g,"\\'")}')`,P.desiredBehaviors.includes(b)?'✅':'☐',b,P.desiredBehaviors.includes(b)?'sel-g':'')).join('');
+        P.desiredBehaviors.filter(b=>!BEH_OPT.includes(b)).forEach(b=>{g.innerHTML+=mkChip(`toggleBeh('${b.replace(/'/g,"\\'")}')`,'+',b,'sel-g')});
+    }
+    function toggleBeh(v){toggleArr(P.desiredBehaviors,v);renderBeh()}
+    function addCustomBeh(){const el=document.getElementById('customBeh');const v=el.value.trim();if(v&&!P.desiredBehaviors.includes(v)){P.desiredBehaviors.push(v);el.value='';renderBeh()}}
+
+    // ── Step 8: Free, Ask, HB ──
+    function renderFree(){
+        document.getElementById('freeGrid').innerHTML=FREE_OPT.map(a=>mkChip(`toggleFree('${a.replace(/'/g,"\\'")}')`,P.freeActions.includes(a)?'✅':'☐',a,P.freeActions.includes(a)?'sel-g':'')).join('');
+    }
+    function toggleFree(v){toggleArr(P.freeActions,v);renderFree()}
+    function renderAsk(){
+        document.getElementById('askGrid').innerHTML=ASK_OPT.map(a=>mkChip(`toggleAsk('${a.replace(/'/g,"\\'")}')`,P.askActions.includes(a)?'⚠️':'☐',a,P.askActions.includes(a)?'sel-w':'')).join('');
+    }
+    function toggleAsk(v){toggleArr(P.askActions,v);renderAsk()}
+    function renderHbFreq(){
+        document.getElementById('hbFreqGrid').innerHTML=HB_FREQ.map(f=>`<button class="sc ${P.hbFreq===f?'sel':''}" style="justify-content:center;padding:10px 6px" onclick="P.hbFreq='${f}';renderHbFreq()"><span class="ct"><span class="t" style="text-align:center;font-size:12px">A cada ${f}</span></span></button>`).join('');
+        const m={['2h']:12,['4h']:6,['6h']:4,['8h']:3,['12h']:2};const d=m[P.hbFreq]||6;
+        document.getElementById('hbCost').textContent=`~R$0,04/heartbeat. A cada ${P.hbFreq} = ${d}x/dia = ~R$${(d*30*0.04).toFixed(0)}/mes`;
+    }
+    function renderHbCheck(){
+        document.getElementById('hbCheckGrid').innerHTML=HB_CHECKS.map(c=>mkChip(`toggleHbCheck('${c.replace(/'/g,"\\'")}')`,P.hbChecks.includes(c)?'✅':'☐',c,P.hbChecks.includes(c)?'sel-g':'')).join('');
+    }
+    function toggleHbCheck(v){toggleArr(P.hbChecks,v);renderHbCheck()}
+
+    // ── Collect persona data ──
+    function collectPersona(){
+        return {
+            step1:{fullName:document.getElementById('p_fullName').value,nickname:document.getElementById('p_nickname').value,timezone:document.getElementById('p_timezone').value,timezoneCustom:document.getElementById('p_timezoneCustom').value,aboutYou:document.getElementById('p_aboutYou').value,businesses:P.businesses,values:P.values},
+            step2:{communicationStyle:P.commStyle,silenceHours:{from:document.getElementById('t_sil_from').value,to:document.getElementById('t_sil_to').value},focusHours:{from:document.getElementById('t_foc_from').value,to:document.getElementById('t_foc_to').value},notificationHours:{from:document.getElementById('t_not_from').value,to:document.getElementById('t_not_to').value},challenges:P.challenges,tools:P.tools},
+            step3:{profile:P.profile,priorities:P.priorities},
+            step4:{agentName:document.getElementById('p_agentName').value,gender:P.gender,emoji:P.emoji,customEmoji:P.customEmoji,role:P.role,customRole:document.getElementById('p_customRole').value,background:document.getElementById('p_background').value},
+            step5:{tone:P.tone,antiPatterns:P.antiPatterns,desiredBehaviors:P.desiredBehaviors},
+            step7:{freeToDoActions:P.freeActions,askBeforeActions:P.askActions,heartbeatFrequency:P.hbFreq,heartbeatChecks:P.hbChecks}
+        };
+    }
+
+    // ── API Key validation ──
+    let validatedProviders={};
+    ['openai','openrouter'].forEach(p=>{
+        document.getElementById(p+'_key').addEventListener('input',function(){
+            const btn=document.getElementById(p+'_validate');btn.style.display=this.value.trim()?'block':'none';
+            document.getElementById(p+'_model_wrap').classList.remove('visible');document.getElementById(p+'_status').textContent='';document.getElementById(p+'_validate').classList.remove('valid');
         });
-        document.getElementById('anthropic_key').addEventListener('input', function() {
-            document.getElementById('anthropic_model_wrap').classList.remove('visible');
-            document.getElementById('anthropic_status').textContent = '';
-            document.getElementById('anthropic_validate').classList.remove('valid');
-        });
+    });
+    document.getElementById('anthropic_key').addEventListener('input',function(){
+        document.getElementById('anthropic_model_wrap').classList.remove('visible');document.getElementById('anthropic_status').textContent='';document.getElementById('anthropic_validate').classList.remove('valid');
+    });
 
-        let validatedProviders = {};
+    async function validateKey(provider){
+        const keyEl=document.getElementById(provider+'_key'),btn=document.getElementById(provider+'_validate'),st=document.getElementById(provider+'_status'),mw=document.getElementById(provider+'_model_wrap'),ms=document.getElementById(provider+'_model');
+        const key=keyEl.value.trim();if(!key){st.className='ks invalid';st.textContent='Insira a chave primeiro.';return}
+        btn.classList.add('loading');btn.textContent='Validando...';st.textContent='';mw.classList.remove('visible');
+        try{
+            const r=await fetch('/api/validate-key',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({provider,key})});const d=await r.json();
+            if(d.success&&d.models&&d.models.length>0){
+                st.className='ks valid';st.innerHTML='&#10003; Chave valida — '+d.models.length+' modelos';btn.classList.add('valid');btn.textContent='✓';
+                ms.innerHTML='';d.models.forEach(m=>{const o=document.createElement('option');o.value=provider+'/'+m.id;o.textContent=m.name||m.id;ms.appendChild(o)});
+                mw.classList.add('visible');validatedProviders[provider]=true;
+            }else{st.className='ks invalid';st.textContent=d.error||'Chave invalida.';btn.classList.remove('valid');btn.textContent='Validar';validatedProviders[provider]=false}
+        }catch(e){st.className='ks invalid';st.textContent='Erro: '+e.message;btn.textContent='Validar'}
+        btn.classList.remove('loading');
+    }
 
-        async function validateKey(provider) {
-            const keyEl = document.getElementById(provider + '_key');
-            const btn = document.getElementById(provider + '_validate');
-            const statusEl = document.getElementById(provider + '_status');
-            const modelWrap = document.getElementById(provider + '_model_wrap');
-            const modelSelect = document.getElementById(provider + '_model');
-            const key = keyEl.value.trim();
+    function validateStep2(){
+        const ak=document.getElementById('anthropic_key').value.trim(),ok=document.getElementById('openai_key').value.trim(),rk=document.getElementById('openrouter_key').value.trim();
+        const err=document.getElementById('step2Error');
+        if(ak&&!ak.startsWith('sk-ant-')){err.className='sm error';err.textContent='Anthropic deve comecar com sk-ant-';return}
+        const hasAny=(ak&&validatedProviders.anthropic)||(ok&&validatedProviders.openai)||(rk&&validatedProviders.openrouter);
+        if(!hasAny){err.className='sm error';err.textContent='Insira e valide pelo menos uma chave de API.';return}
+        if(ak&&!validatedProviders.anthropic){err.className='sm error';err.textContent='Valide a chave da Anthropic.';return}
+        if(ok&&!validatedProviders.openai){err.className='sm error';err.textContent='Valide a chave da OpenAI.';return}
+        if(rk&&!validatedProviders.openrouter){err.className='sm error';err.textContent='Valide a chave da OpenRouter.';return}
+        err.className='sm';err.style.display='none';goTo(3);
+    }
 
-            if (!key) { statusEl.className = 'key-status invalid'; statusEl.textContent = 'Insira a chave primeiro.'; return; }
+    function validateStep9(){
+        const token=document.getElementById('telegram_token').value.trim();const err=document.getElementById('step9Error');
+        if(!token){err.className='sm error';err.textContent='O token do bot e obrigatorio.';return}
+        if(!token.includes(':')){err.className='sm error';err.textContent='Token invalido. Formato: 1234567890:ABCdef...';return}
+        err.className='sm';err.style.display='none';startDeploy();
+    }
 
-            btn.classList.add('loading');
-            btn.textContent = 'Validando...';
-            statusEl.textContent = '';
-            modelWrap.classList.remove('visible');
+    async function startDeploy(){
+        goTo(10);const msg=document.getElementById('loadingMsg'),err=document.getElementById('step10Error');
+        const msgs=['Configurando sua instancia...','Instalando configuracoes do OpenClaw...','Gerando personalidade do agente...','Conectando bot do Telegram...','Iniciando OpenClaw Gateway...'];
+        let mi=0;const iv=setInterval(()=>{mi=(mi+1)%msgs.length;msg.textContent=msgs[mi]},3000);
+        try{
+            const r=await fetch('/api/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+                anthropic_key:document.getElementById('anthropic_key').value.trim(),
+                openai_key:document.getElementById('openai_key').value.trim(),
+                openrouter_key:document.getElementById('openrouter_key').value.trim(),
+                telegram_token:document.getElementById('telegram_token').value.trim(),
+                selected_model:document.getElementById('anthropic_model').value||document.getElementById('openai_model').value||document.getElementById('openrouter_model').value||'',
+                persona:collectPersona()
+            })});
+            clearInterval(iv);const d=await r.json();
+            if(d.success){setupData=d;goTo(11);startPairingCountdown()}
+            else{err.className='sm error';err.textContent='Erro: '+d.error}
+        }catch(e){clearInterval(iv);err.className='sm error';err.textContent='Erro: '+e.message}
+    }
 
-            try {
-                const resp = await fetch('/api/validate-key', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ provider, key })
-                });
-                const data = await resp.json();
+    function startPairingCountdown(){
+        const notice=document.getElementById('pairingNotice'),cd=document.getElementById('pairingCountdown'),inp=document.getElementById('pairingInputArea'),btn=document.getElementById('pairingBtn'),retry=document.getElementById('pairingRetry');
+        let sec=15;const t=setInterval(()=>{sec--;cd.textContent=sec;if(sec<=0){clearInterval(t);notice.innerHTML='<span style="color:var(--success)">&#10003;</span> <span>Bot online! Envie uma mensagem e cole o codigo abaixo.</span>';notice.classList.add('ready');inp.style.opacity='1';inp.style.pointerEvents='auto';btn.disabled=false;retry.style.display='block';document.getElementById('pairing_code').focus()}},1000);
+    }
 
-                if (data.success && data.models && data.models.length > 0) {
-                    statusEl.className = 'key-status valid';
-                    statusEl.innerHTML = '&#10003; Chave valida — ' + data.models.length + ' modelos encontrados';
-                    btn.classList.add('valid');
-                    btn.textContent = '&#10003;';
+    async function submitPairing(){
+        const code=document.getElementById('pairing_code').value.trim().toUpperCase(),err=document.getElementById('step11Error'),btn=document.getElementById('pairingBtn');
+        if(!code||code.length<4){err.className='sm error';err.textContent='Digite o codigo de pareamento.';return}
+        btn.disabled=true;btn.textContent='Verificando...';err.className='sm';err.style.display='none';
+        try{
+            const r=await fetch('/api/pairing',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code})});const d=await r.json();
+            if(d.success){showSuccess()}else{err.className='sm error';err.textContent='Erro: '+d.error;btn.disabled=false;btn.textContent='Confirmar Pareamento'}
+        }catch(e){err.className='sm error';err.textContent='Erro: '+e.message;btn.disabled=false;btn.textContent='Confirmar Pareamento'}
+    }
 
-                    modelSelect.innerHTML = '';
-                    data.models.forEach(m => {
-                        const opt = document.createElement('option');
-                        opt.value = provider + '/' + m.id;
-                        opt.textContent = m.name || m.id;
-                        modelSelect.appendChild(opt);
-                    });
-                    modelWrap.classList.add('visible');
-                    validatedProviders[provider] = true;
-                } else {
-                    statusEl.className = 'key-status invalid';
-                    statusEl.textContent = data.error || 'Chave invalida ou sem modelos disponiveis.';
-                    btn.classList.remove('valid');
-                    btn.textContent = 'Validar';
-                    validatedProviders[provider] = false;
-                }
-            } catch (err) {
-                statusEl.className = 'key-status invalid';
-                statusEl.textContent = 'Erro de conexao: ' + err.message;
-                btn.textContent = 'Validar';
-            }
-            btn.classList.remove('loading');
-        }
+    async function skipPairing(){try{await fetch('/api/skip-pairing',{method:'POST'})}catch(e){}showSuccess()}
+    function showSuccess(){if(setupData.url)document.getElementById('dashboardLink').href=setupData.url;goTo(12)}
 
-        function validateStep3() {
-            const anthropicKey = document.getElementById('anthropic_key').value.trim();
-            const openaiKey = document.getElementById('openai_key').value.trim();
-            const openrouterKey = document.getElementById('openrouter_key').value.trim();
-            const errEl = document.getElementById('step3Error');
+    // ── Timezone toggle ──
+    document.getElementById('p_timezone').addEventListener('change',function(){document.getElementById('p_timezoneCustom').style.display=this.value==='other'?'block':'none'});
+    // ── About char count ──
+    document.getElementById('p_aboutYou').addEventListener('input',function(){const n=this.value.length;const el=document.getElementById('aboutCount');el.textContent=n+' caracteres'+(n>300?' ✓ Otimo!':'');el.className=n>300?'cc ok':'cc'});
 
-            // Validar formato se preenchido
-            if (anthropicKey && !anthropicKey.startsWith('sk-ant-')) {
-                errEl.className = 'status-msg error';
-                errEl.textContent = 'A chave da Anthropic deve comecar com sk-ant-';
-                return;
-            }
-
-            // Pelo menos uma chave deve estar preenchida e validada
-            const hasAny = (anthropicKey && validatedProviders['anthropic'])
-                        || (openaiKey && validatedProviders['openai'])
-                        || (openrouterKey && validatedProviders['openrouter']);
-            if (!hasAny) {
-                errEl.className = 'status-msg error';
-                errEl.textContent = 'Insira e valide pelo menos uma chave de API.';
-                return;
-            }
-
-            // Se preencheu mas nao validou, avisar
-            if (anthropicKey && !validatedProviders['anthropic']) {
-                errEl.className = 'status-msg error';
-                errEl.textContent = 'Valide a chave da Anthropic antes de continuar.';
-                return;
-            }
-            if (openaiKey && !validatedProviders['openai']) {
-                errEl.className = 'status-msg error';
-                errEl.textContent = 'Valide a chave da OpenAI antes de continuar.';
-                return;
-            }
-            if (openrouterKey && !validatedProviders['openrouter']) {
-                errEl.className = 'status-msg error';
-                errEl.textContent = 'Valide a chave da OpenRouter antes de continuar.';
-                return;
-            }
-
-            errEl.className = 'status-msg';
-            errEl.style.display = 'none';
-            goTo(4);
-        }
-
-        function validateStep4() {
-            const token = document.getElementById('telegram_token').value.trim();
-            const errEl = document.getElementById('step4Error');
-
-            if (!token) {
-                errEl.className = 'status-msg error';
-                errEl.textContent = 'O token do bot e obrigatorio.';
-                return;
-            }
-            if (!token.includes(':')) {
-                errEl.className = 'status-msg error';
-                errEl.textContent = 'Token invalido. Deve ter o formato: 1234567890:ABCdef...';
-                return;
-            }
-            errEl.className = 'status-msg';
-            errEl.style.display = 'none';
-            startDeploy();
-        }
-
-        async function startDeploy() {
-            goTo(5);
-            const msgEl = document.getElementById('loadingMsg');
-            const errEl = document.getElementById('step5Error');
-
-            const messages = [
-                'Configurando sua instancia...',
-                'Instalando configuracoes do OpenClaw...',
-                'Conectando bot do Telegram...',
-                'Iniciando OpenClaw Gateway...'
-            ];
-
-            let msgIdx = 0;
-            const msgInterval = setInterval(() => {
-                msgIdx = (msgIdx + 1) % messages.length;
-                msgEl.textContent = messages[msgIdx];
-            }, 3000);
-
-            try {
-                const resp = await fetch('/api/setup', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        anthropic_key: document.getElementById('anthropic_key').value.trim(),
-                        openai_key: document.getElementById('openai_key').value.trim(),
-                        openrouter_key: document.getElementById('openrouter_key').value.trim(),
-                        telegram_token: document.getElementById('telegram_token').value.trim(),
-                        selected_model: document.getElementById('anthropic_model').value
-                            || document.getElementById('openai_model').value
-                            || document.getElementById('openrouter_model').value
-                            || '',
-                    })
-                });
-
-                clearInterval(msgInterval);
-                const data = await resp.json();
-
-                if (data.success) {
-                    setupData = data;
-                    goTo(6);
-                    startPairingCountdown();
-                } else {
-                    errEl.className = 'status-msg error';
-                    errEl.textContent = 'Erro: ' + data.error;
-                }
-            } catch (err) {
-                clearInterval(msgInterval);
-                errEl.className = 'status-msg error';
-                errEl.textContent = 'Erro de conexao: ' + err.message;
-            }
-        }
-
-        function startPairingCountdown() {
-            const notice = document.getElementById('pairingNotice');
-            const countdown = document.getElementById('pairingCountdown');
-            const inputArea = document.getElementById('pairingInputArea');
-            const btn = document.getElementById('pairingBtn');
-            const retryHint = document.getElementById('pairingRetry');
-            let seconds = 15;
-
-            const timer = setInterval(() => {
-                seconds--;
-                countdown.textContent = seconds;
-                if (seconds <= 0) {
-                    clearInterval(timer);
-                    // Enable input area
-                    notice.innerHTML = '<span style="color:#22c55e;">&#10003;</span> <span>Bot online! Envie uma mensagem para o bot no Telegram e cole o codigo abaixo.</span>';
-                    notice.classList.add('ready');
-                    inputArea.style.opacity = '1';
-                    inputArea.style.pointerEvents = 'auto';
-                    btn.disabled = false;
-                    retryHint.style.display = 'block';
-                    document.getElementById('pairing_code').focus();
-                }
-            }, 1000);
-        }
-
-        async function submitPairing() {
-            const code = document.getElementById('pairing_code').value.trim().toUpperCase();
-            const errEl = document.getElementById('step6Error');
-            const infoEl = document.getElementById('step6Info');
-            const btn = document.getElementById('pairingBtn');
-
-            if (!code || code.length < 4) {
-                errEl.className = 'status-msg error';
-                errEl.textContent = 'Digite o codigo de pareamento.';
-                return;
-            }
-
-            btn.disabled = true;
-            btn.textContent = 'Verificando...';
-            errEl.className = 'status-msg';
-            errEl.style.display = 'none';
-
-            try {
-                const resp = await fetch('/api/pairing', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ code: code })
-                });
-
-                const data = await resp.json();
-
-                if (data.success) {
-                    showSuccess();
-                } else {
-                    errEl.className = 'status-msg error';
-                    errEl.textContent = 'Erro: ' + data.error;
-                    btn.disabled = false;
-                    btn.textContent = 'Confirmar Pareamento';
-                }
-            } catch (err) {
-                errEl.className = 'status-msg error';
-                errEl.textContent = 'Erro de conexao: ' + err.message;
-                btn.disabled = false;
-                btn.textContent = 'Confirmar Pareamento';
-            }
-        }
-
-        async function skipPairing() {
-            try {
-                await fetch('/api/skip-pairing', { method: 'POST' });
-            } catch(e) {}
-            showSuccess();
-        }
-
-        function showSuccess() {
-            if (setupData.url) {
-                document.getElementById('dashboardLink').href = setupData.url;
-            }
-            goTo(7);
-        }
+    // ── Init all renders ──
+    renderVals();renderBiz();renderComm();renderChal();renderTools();renderProf();renderPri();
+    renderGender();renderEmoji();renderRole();renderTone();renderAnti();renderBeh();
+    renderFree();renderAsk();renderHbFreq();renderHbCheck();updatePB();
     </script>
 </body>
 </html>
+
 """
 
 DONE_PAGE = """
@@ -1225,66 +1055,24 @@ DONE_PAGE = """
     <title>OpenClaw — Configurado</title>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700&family=Syne:wght@700;800&display=swap');
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-            background: #0a0a0a;
-            color: #f5f5f5;
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 20px;
-        }
-        .container {
-            background: #141414;
-            border: 1px solid #2a2a2a;
-            border-radius: 16px;
-            padding: 40px;
-            max-width: 520px;
-            width: 100%;
-            text-align: center;
-        }
-        .logos {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 16px;
-            margin-bottom: 24px;
-        }
-        .logos img { height: 36px; }
-        .logos span { color: #3a3a3a; font-size: 20px; font-weight: 300; }
-        h1 { font-family: 'Syne', 'Inter', sans-serif; font-size: 24px; margin-bottom: 12px; }
-        h1 span { color: #22c55e; }
-        p { font-family: 'Space Grotesk', 'Inter', sans-serif; color: #a3a3a3; margin-bottom: 20px; line-height: 1.5; }
-        .link-btn {
-            display: inline-block;
-            padding: 14px 32px;
-            background: #dc2626;
-            border-radius: 10px;
-            color: white;
-            text-decoration: none;
-            font-family: 'Space Grotesk', 'Inter', sans-serif;
-            font-size: 15px;
-            font-weight: 600;
-            transition: background 0.2s;
-        }
-        .link-btn:hover { background: #b91c1c; }
-        .token-info {
-            margin-top: 20px;
-            padding: 14px;
-            background: #0a0a0a;
-            border-radius: 8px;
-            border: 1px solid #2a2a2a;
-        }
-        .token-info label { font-family: 'Space Grotesk', sans-serif; font-size: 11px; color: #737373; text-transform: uppercase; letter-spacing: 0.05em; }
-        .token-info code { display: block; margin-top: 6px; font-family: monospace; color: #dc2626; font-size: 12px; word-break: break-all; }
-        .brand { margin-top: 24px; font-size: 11px; color: #404040; }
-        .brand span { color: #666; }
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{font-family:'Inter',sans-serif;background:#0A0A0F;color:#F5F5F5;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+        body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(rgba(255,255,255,.015) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.015) 1px,transparent 1px);background-size:60px 60px;pointer-events:none}
+        .c{background:#111118;border:1px solid rgba(255,255,255,.06);border-radius:4px;padding:40px;max-width:520px;width:100%;text-align:center;position:relative;z-index:1}
+        .logos{display:flex;align-items:center;justify-content:center;gap:16px;margin-bottom:24px}
+        .logos img{height:36px}.logos span{color:#3a3a3a;font-size:20px;font-weight:300}
+        h1{font-family:'Syne','Inter',sans-serif;font-size:24px;margin-bottom:12px}h1 span{color:#4CAF50}
+        p{font-family:'Space Grotesk','Inter',sans-serif;color:#888899;margin-bottom:20px;line-height:1.5}
+        .lb{display:inline-block;padding:14px 32px;background:#E53935;border-radius:4px;color:#fff;text-decoration:none;font-family:'Space Grotesk',sans-serif;font-size:15px;font-weight:600;transition:background .2s;box-shadow:0 0 20px rgba(229,57,53,.15)}
+        .lb:hover{background:#C62828}
+        .ti{margin-top:20px;padding:14px;background:#0D0D14;border-radius:4px;border:1px solid #1E1E2A}
+        .ti label{font-family:'Space Grotesk',sans-serif;font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em}
+        .ti code{display:block;margin-top:6px;font-family:monospace;color:#E53935;font-size:12px;word-break:break-all}
+        .brand{margin-top:24px;font-size:11px;color:#444}.brand span{color:#888899}
     </style>
 </head>
 <body>
-    <div class="container">
+    <div class="c">
         <div class="logos">
             <img src="https://upload.wikimedia.org/wikipedia/commons/5/5e/Openclaw-logo-text-dark.png" alt="OpenClaw" />
             <span>+</span>
@@ -1292,8 +1080,8 @@ DONE_PAGE = """
         </div>
         <h1><span>&#10003;</span> OpenClaw Configurado</h1>
         <p>Seu assistente de IA esta rodando e pronto para uso.</p>
-        <a href="{{ url }}" class="link-btn">Acessar OpenClaw &rarr;</a>
-        <div class="token-info">
+        <a href="{{ url }}" class="lb">Acessar OpenClaw &rarr;</a>
+        <div class="ti">
             <label>Gateway Token</label>
             <code>{{ token }}</code>
         </div>
@@ -1571,6 +1359,14 @@ def setup():
     with open(auth_profiles_path, "w") as f:
         json.dump(auth_profiles, f, indent=2)
     os.chmod(auth_profiles_path, 0o600)
+
+    # Gerar arquivos de persona (.md) no workspace
+    persona = data.get("persona", {})
+    if persona:
+        try:
+            write_persona_files(persona)
+        except Exception:
+            pass  # Nao falhar o setup por causa da persona
 
     # Permissoes (UID 1000 = node no container)
     subprocess.run(["chown", "-R", "1000:1000", OPENCLAW_CONFIG_DIR], capture_output=True)
