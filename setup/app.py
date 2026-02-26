@@ -75,6 +75,71 @@ def update_env(key, value):
 
 
 WORKSPACE_DIR = f"{OPENCLAW_CONFIG_DIR}/workspace"
+CRON_DIR = f"{OPENCLAW_CONFIG_DIR}/cron"
+
+
+def setup_docker_access():
+    """Inject docker.sock + docker binary into docker-compose.yml and set permissions."""
+    import yaml
+
+    compose_path = os.path.join(OPENCLAW_DIR, "docker-compose.yml")
+    try:
+        with open(compose_path, "r") as f:
+            compose = yaml.safe_load(f)
+    except Exception:
+        return
+
+    gw = compose.get("services", {}).get("openclaw-gateway")
+    if not gw:
+        return
+
+    volumes = gw.setdefault("volumes", [])
+    sock_mount = "/var/run/docker.sock:/var/run/docker.sock"
+    bin_mount = "/usr/bin/docker:/usr/bin/docker"
+    if sock_mount not in volumes:
+        volumes.append(sock_mount)
+    if bin_mount not in volumes:
+        volumes.append(bin_mount)
+
+    with open(compose_path, "w") as f:
+        yaml.dump(compose, f, default_flow_style=False, sort_keys=False)
+
+    # Set docker socket permissions (allows node user inside container)
+    subprocess.run(["chmod", "666", "/var/run/docker.sock"], capture_output=True)
+
+    # Create systemd service to persist socket permissions across reboots
+    service_content = """\
+[Unit]
+Description=Set Docker socket permissions for OpenClaw
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/chmod 666 /var/run/docker.sock
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+"""
+    service_path = "/etc/systemd/system/docker-socket-perms.service"
+    try:
+        with open(service_path, "w") as f:
+            f.write(service_content)
+        subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
+        subprocess.run(["systemctl", "enable", "docker-socket-perms.service"], capture_output=True)
+    except Exception:
+        pass
+
+    # Create cron directory for the agent
+    os.makedirs(CRON_DIR, exist_ok=True)
+    # Initialize empty jobs.json if not exists
+    jobs_path = os.path.join(CRON_DIR, "jobs.json")
+    if not os.path.exists(jobs_path):
+        with open(jobs_path, "w") as f:
+            json.dump([], f)
+    subprocess.run(["chown", "-R", "1000:1000", CRON_DIR], capture_output=True)
+
 
 # ── System instructions appended to AGENTS.md ──
 AGENTS_SYSTEM_INSTRUCTIONS = """
@@ -1370,6 +1435,12 @@ def setup():
 
     # Permissoes (UID 1000 = node no container)
     subprocess.run(["chown", "-R", "1000:1000", OPENCLAW_CONFIG_DIR], capture_output=True)
+
+    # Configurar acesso Docker (socket + cron) antes de subir o gateway
+    try:
+        setup_docker_access()
+    except Exception:
+        pass  # Nao falhar o setup por causa disso
 
     # Iniciar OpenClaw Gateway
     try:
