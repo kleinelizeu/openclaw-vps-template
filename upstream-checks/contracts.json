@@ -1,0 +1,73 @@
+{
+  "upstream_repo": "openclaw/openclaw",
+  "upstream_branch": "main",
+  "upstream_raw_url": "https://raw.githubusercontent.com/openclaw/openclaw/main",
+  "contracts": {
+    "dockerfile": {
+      "path": "Dockerfile",
+      "must_exist": true,
+      "must_contain": [
+        "node:22",
+        "pnpm",
+        "openclaw.mjs",
+        "USER node",
+        "1000"
+      ]
+    },
+    "docker_compose": {
+      "path": "docker-compose.yml",
+      "must_exist": true,
+      "required_services": [
+        "openclaw-gateway",
+        "openclaw-cli"
+      ],
+      "required_env_refs": [
+        "OPENCLAW_IMAGE",
+        "OPENCLAW_GATEWAY_TOKEN",
+        "OPENCLAW_GATEWAY_PORT",
+        "OPENCLAW_BRIDGE_PORT",
+        "OPENCLAW_GATEWAY_BIND",
+        "OPENCLAW_CONFIG_DIR",
+        "OPENCLAW_WORKSPACE_DIR"
+      ],
+      "required_ports": [
+        "18789",
+        "18790"
+      ],
+      "gateway_command_must_contain": [
+        "node",
+        "dist/index.js",
+        "gateway"
+      ],
+      "cli_entrypoint_must_contain": [
+        "node",
+        "dist/index.js"
+      ]
+    },
+    "env_example": {
+      "path": ".env.example",
+      "must_exist": true,
+      "required_vars": [
+        "OPENCLAW_GATEWAY_TOKEN",
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "OPENROUTER_API_KEY"
+      ]
+    },
+    "cli_interface": {
+      "entrypoint": "dist/index.js",
+      "onboard_flags": [
+        "--non-interactive",
+        "--accept-risk",
+        "--mode",
+        "--flow",
+        "--gateway-bind",
+        "--gateway-auth",
+        "--skip-channels",
+        "--no-install-daemon"
+      ],
+      "pairing_command": "pairing approve telegram",
+      "gateway_command": "gateway"
+    }
+  }
+}

@@ -1,0 +1,282 @@
+name: Upstream Compatibility Check
+
+on:
+  schedule:
+    # Diario as 8h UTC — checks estaticos (rapido, ~1min)
+    - cron: '0 8 * * *'
+    # Semanal segunda 10h UTC — build Docker completo (~10min)
+    - cron: '0 10 * * 1'
+  workflow_dispatch:
+    inputs:
+      run_build:
+        description: 'Executar build Docker completo?'
+        required: false
+        default: 'false'
+        type: boolean
+      auto_fix:
+        description: 'Tentar correcao automatica com Claude?'
+        required: false
+        default: 'true'
+        type: boolean
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  static-checks:
+    name: Contract Checks (Static)
+    runs-on: ubuntu-latest
+    outputs:
+      has_failures: ${{ steps.checks.outputs.has_failures }}
+    steps:
+      - name: Checkout template repo
+        uses: actions/checkout@v4
+
+      - name: Install jq
+        run: sudo apt-get install -y jq
+
+      - name: Download upstream files
+        run: |
+          mkdir -p /tmp/upstream
+          UPSTREAM_RAW=$(jq -r '.upstream_raw_url' upstream-checks/contracts.json)
+
+          for file in Dockerfile docker-compose.yml .env.example package.json; do
+            echo -n "Downloading ${file}... "
+            if curl -sf "${UPSTREAM_RAW}/${file}" -o "/tmp/upstream/${file}"; then
+              echo "OK"
+            else
+              echo "MISSING"
+            fi
+          done
+
+      - name: Run contract checks
+        id: checks
+        run: |
+          chmod +x upstream-checks/check-contracts.sh
+          chmod +x upstream-checks/checks/*.sh
+          bash upstream-checks/check-contracts.sh /tmp/upstream --skip-build || true
+
+      - name: Save upstream diff context
+        if: steps.checks.outputs.has_failures == 'true'
+        run: |
+          mkdir -p /tmp/upstream-context
+          cp /tmp/check-report.md /tmp/upstream-context/ 2>/dev/null || true
+          # Salvar arquivos upstream que mudaram para contexto do auto-fix
+          for file in Dockerfile docker-compose.yml .env.example; do
+            if [[ -f "/tmp/upstream/${file}" ]]; then
+              cp "/tmp/upstream/${file}" "/tmp/upstream-context/upstream-${file}"
+            fi
+          done
+
+      - name: Upload report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: check-report
+          path: /tmp/check-report.md
+          retention-days: 30
+
+      - name: Upload upstream context
+        if: steps.checks.outputs.has_failures == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: upstream-context
+          path: /tmp/upstream-context/
+          retention-days: 7
+
+      - name: Create Issue on failure
+        if: steps.checks.outputs.has_failures == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let report = '';
+            try {
+              report = fs.readFileSync('/tmp/check-report.md', 'utf8');
+            } catch (e) {
+              report = 'Relatorio nao disponivel. Verifique os logs do workflow.';
+            }
+
+            // Verificar se ja existe issue aberta (evitar duplicatas)
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'upstream-breaking-change'
+            });
+
+            if (issues.length === 0) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: 'Breaking change detectado no OpenClaw upstream',
+                body: report + '\n\n---\n[Ver logs do workflow](' +
+                  context.serverUrl + '/' + context.repo.owner + '/' +
+                  context.repo.repo + '/actions/runs/' + context.runId + ')',
+                labels: ['upstream-breaking-change']
+              });
+              console.log('Issue criada com sucesso.');
+            } else {
+              // Atualizar issue existente com comentario
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issues[0].number,
+                body: '**Atualizacao** (' + new Date().toISOString().split('T')[0] + '):\n\n' + report
+              });
+              console.log('Comentario adicionado a issue #' + issues[0].number);
+            }
+
+  docker-build-test:
+    name: Docker Build (Weekly)
+    runs-on: ubuntu-latest
+    # Roda apenas no cron semanal OU quando acionado manualmente com run_build=true
+    if: >-
+      github.event.schedule == '0 10 * * 1' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.run_build == 'true')
+    steps:
+      - name: Checkout template repo
+        uses: actions/checkout@v4
+
+      - name: Install jq
+        run: sudo apt-get install -y jq
+
+      - name: Run full build check
+        id: build
+        run: |
+          chmod +x upstream-checks/check-contracts.sh
+          chmod +x upstream-checks/checks/*.sh
+          export CONTRACTS_FILE="upstream-checks/contracts.json"
+          source upstream-checks/lib/utils.sh
+          source upstream-checks/checks/05-docker-build.sh
+
+      - name: Create Issue on build failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'upstream-build-failure'
+            });
+
+            const body = [
+              '## Docker Build Falhou',
+              '',
+              'O build semanal da imagem Docker do OpenClaw upstream falhou.',
+              '',
+              '### Possiveis causas',
+              '- Mudanca no Dockerfile upstream',
+              '- Dependencia removida ou atualizada',
+              '- Mudanca no sistema de build (pnpm/node)',
+              '',
+              '### Acao necessaria',
+              '- Verificar [Dockerfile upstream](https://github.com/openclaw/openclaw/blob/main/Dockerfile)',
+              '- Verificar [commits recentes](https://github.com/openclaw/openclaw/commits/main)',
+              '',
+              '[Ver logs do workflow](' + context.serverUrl + '/' + context.repo.owner + '/' +
+                context.repo.repo + '/actions/runs/' + context.runId + ')'
+            ].join('\n');
+
+            if (issues.length === 0) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: 'Build do Docker OpenClaw upstream falhou',
+                body: body,
+                labels: ['upstream-build-failure']
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issues[0].number,
+                body: '**Atualizacao** (' + new Date().toISOString().split('T')[0] + '):\n\nBuild continua falhando. [Ver logs](' +
+                  context.serverUrl + '/' + context.repo.owner + '/' +
+                  context.repo.repo + '/actions/runs/' + context.runId + ')'
+              });
+            }
+
+  auto-fix:
+    name: Auto-Fix Breaking Changes
+    needs: static-checks
+    runs-on: ubuntu-latest
+    # Roda apenas quando ha falhas E auto_fix nao foi desabilitado
+    if: >-
+      needs.static-checks.outputs.has_failures == 'true' &&
+      (github.event_name != 'workflow_dispatch' || github.event.inputs.auto_fix != 'false')
+    steps:
+      - name: Checkout template repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download upstream context
+        uses: actions/download-artifact@v4
+        with:
+          name: upstream-context
+          path: /tmp/upstream-context
+
+      - name: Prepare fix context
+        id: context
+        run: |
+          # Ler o relatorio de falhas
+          REPORT=$(cat /tmp/upstream-context/check-report.md 2>/dev/null || echo "Relatorio nao disponivel")
+          echo "report<<ENDOFREPORT" >> "$GITHUB_OUTPUT"
+          echo "$REPORT" >> "$GITHUB_OUTPUT"
+          echo "ENDOFREPORT" >> "$GITHUB_OUTPUT"
+
+          # Copiar arquivos upstream para o repo para Claude ter acesso
+          mkdir -p /tmp/upstream-files
+          for file in /tmp/upstream-context/upstream-*; do
+            if [[ -f "$file" ]]; then
+              basename="${file#/tmp/upstream-context/upstream-}"
+              cp "$file" "/tmp/upstream-files/${basename}"
+            fi
+          done
+
+      - name: Claude Auto-Fix
+        uses: anthropics/claude-code-action@v1
+        with:
+          prompt: |
+            ## Contexto
+
+            Este repositorio eh um template de instalacao VPS para o OpenClaw (https://github.com/openclaw/openclaw).
+            Os checks automaticos detectaram breaking changes no upstream que afetam este template.
+
+            ## Relatorio de Falhas
+
+            ${{ steps.context.outputs.report }}
+
+            ## Arquivos upstream atuais
+
+            Os arquivos upstream atualizados estao em /tmp/upstream-files/ para referencia.
+
+            ## O que voce deve fazer
+
+            1. Leia o relatorio acima e identifique EXATAMENTE o que mudou no upstream
+            2. Leia os arquivos do template que dependem do que mudou:
+               - build-template.sh (clona e builda o OpenClaw)
+               - setup/firstboot.sh (gera .env e configura diretorios)
+               - setup/app.py (wizard web que executa docker compose, onboard, pairing)
+               - config/openclaw-nginx.conf (proxy reverso para o gateway)
+               - systemd/*.service (servicos systemd)
+               - upstream-checks/contracts.json (contratos que precisam ser atualizados)
+               - upstream-checks/checks/*.sh (scripts de verificacao)
+            3. Corrija TODOS os arquivos afetados para serem compativeis com o upstream atual
+            4. Atualize o contracts.json e os scripts de check para refletir a nova realidade
+            5. Rode os checks localmente para confirmar: bash upstream-checks/check-contracts.sh --skip-build
+
+            ## Regras importantes
+
+            - NAO altere a logica de negocio do wizard (app.py) a menos que seja necessario
+            - Faca apenas as mudancas MINIMAS necessarias para restaurar compatibilidade
+            - Se uma mudanca upstream for muito grande para corrigir automaticamente, documente o que precisa ser feito manualmente
+            - Mantenha os comentarios em portugues
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
