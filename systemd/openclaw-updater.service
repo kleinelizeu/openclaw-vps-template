@@ -1,0 +1,17 @@
+[Unit]
+Description=OpenClaw VPS Updater Service
+After=docker.service network-online.target
+Wants=network-online.target
+ConditionPathExists=/var/lib/openclaw-setup-done
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/openclaw
+ExecStart=/usr/bin/python3 /opt/openclaw-setup/updater.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

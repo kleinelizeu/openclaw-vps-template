@@ -69,14 +69,21 @@ chmod +x "${SETUP_DIR}/firstboot.sh"
 python3 -m venv "${SETUP_DIR}/venv"
 "${SETUP_DIR}/venv/bin/pip" install --no-cache-dir -r "${SETUP_DIR}/requirements.txt"
 
+# ── 4b. Instalar updater service ──
+log "Instalando updater service"
+cp "${SCRIPT_DIR}/setup/updater.py" "${SETUP_DIR}/updater.py"
+
 # ── 5. Instalar units systemd ──
 log "Instalando servicos systemd"
 cp "${SCRIPT_DIR}/systemd/openclaw-firstboot.service" /etc/systemd/system/
 cp "${SCRIPT_DIR}/systemd/openclaw-setup-web.service" /etc/systemd/system/
 
+cp "${SCRIPT_DIR}/systemd/openclaw-updater.service" /etc/systemd/system/
+
 systemctl daemon-reload
 systemctl enable openclaw-firstboot.service
 systemctl enable openclaw-setup-web.service
+systemctl enable openclaw-updater.service
 
 # ── 6. Instalar MOTD ──
 log "Configurando MOTD"

@@ -1292,6 +1292,17 @@ def setup():
         update_env("OPENROUTER_API_KEY", openrouter_key)
     update_env("TELEGRAM_BOT_TOKEN", telegram_token)
 
+    # Inicializar variaveis obrigatorias no .env (docker-compose espera todas)
+    update_env("OPENCLAW_GATEWAY_TOKEN", token)
+    update_env("CLAUDE_AI_SESSION_KEY", "")
+    update_env("CLAUDE_WEB_SESSION_KEY", "")
+    update_env("CLAUDE_WEB_COOKIE", "")
+    update_env("OPENCLAW_CONFIG_DIR", OPENCLAW_CONFIG_DIR)
+    update_env("OPENCLAW_WORKSPACE_DIR", f"{OPENCLAW_CONFIG_DIR}/workspace")
+    update_env("OPENCLAW_GATEWAY_PORT", "18789")
+    update_env("OPENCLAW_BRIDGE_PORT", "18790")
+    update_env("OPENCLAW_GATEWAY_BIND", "lan")
+
     # Garantir que toda a estrutura de diretorios existe com permissoes corretas (UID 1000 = node no container)
     for d in [OPENCLAW_CONFIG_DIR, AGENT_DIR, f"{OPENCLAW_CONFIG_DIR}/workspace"]:
         os.makedirs(d, exist_ok=True)
@@ -1574,6 +1585,7 @@ def finalize_setup():
         f.write("systemctl stop openclaw-setup-web\n")
         f.write("sleep 2\n")
         f.write("systemctl enable --now nginx\n")
+        f.write("systemctl start openclaw-updater\n")
     os.chmod(switch_script, 0o755)
     subprocess.Popen(
         ["systemd-run", "--scope", "--quiet", switch_script],
