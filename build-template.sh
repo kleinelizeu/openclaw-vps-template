@@ -56,7 +56,37 @@ git clone "${OPENCLAW_REPO}" "${OPENCLAW_DIR}"
 
 log "Buildando imagem Docker openclaw:local"
 cd "${OPENCLAW_DIR}"
-docker build -t openclaw:local -f Dockerfile .
+
+# Tenta buildar HEAD; se falhar, volta ate 10 commits para encontrar um que funcione
+BUILD_OK=false
+MAX_FALLBACK=10
+
+if docker build -t openclaw:local -f Dockerfile . 2>&1; then
+  BUILD_OK=true
+  log "Build OK no HEAD ($(git rev-parse --short HEAD))"
+else
+  log "Build falhou no HEAD, tentando commits anteriores..."
+  for i in $(seq 1 ${MAX_FALLBACK}); do
+    COMMIT="HEAD~${i}"
+    SHORT=$(git rev-parse --short "${COMMIT}" 2>/dev/null) || break
+    log "Tentando commit ${SHORT} (HEAD~${i})..."
+    git checkout "${COMMIT}" --quiet
+    if docker build -t openclaw:local -f Dockerfile . 2>&1; then
+      BUILD_OK=true
+      log "Build OK no commit ${SHORT} (HEAD~${i})"
+      # Voltar ao main mas manter a imagem buildada
+      git checkout main --quiet
+      break
+    fi
+  done
+  # Garantir que estamos no main
+  git checkout main --quiet 2>/dev/null || true
+fi
+
+if [[ "${BUILD_OK}" != "true" ]]; then
+  log "ERRO: Nenhum dos ultimos ${MAX_FALLBACK} commits buildou com sucesso"
+  exit 1
+fi
 
 # ── 4. Instalar wizard web (Flask + Gunicorn) ──
 log "Instalando wizard web de setup"

@@ -78,6 +78,8 @@ def run_update():
             _log(f"TIMEOUT: {description}")
             raise RuntimeError(f"{description} timed out")
 
+    MAX_FALLBACK = 10
+
     try:
         _run_step(
             "git fetch origin main",
@@ -89,11 +91,64 @@ def run_update():
             ["git", "reset", "--hard", "origin/main"],
             timeout=30,
         )
-        _run_step(
-            "docker build -t openclaw:local",
-            ["docker", "build", "-t", "openclaw:local", "-f", "Dockerfile", "."],
-            timeout=600,
-        )
+
+        # Tenta buildar HEAD; se falhar, volta commits ate encontrar um que funcione
+        build_ok = False
+        try:
+            _run_step(
+                "docker build -t openclaw:local (HEAD)",
+                ["docker", "build", "-t", "openclaw:local", "-f", "Dockerfile", "."],
+                timeout=600,
+            )
+            build_ok = True
+        except RuntimeError:
+            _log("Build falhou no HEAD, tentando commits anteriores...")
+            for i in range(1, MAX_FALLBACK + 1):
+                ref = f"HEAD~{i}"
+                # Obter hash curto do commit
+                rev = subprocess.run(
+                    ["git", "rev-parse", "--short", ref],
+                    capture_output=True, text=True, timeout=10,
+                    cwd=OPENCLAW_DIR,
+                )
+                if rev.returncode != 0:
+                    break
+                short = rev.stdout.strip()
+                _log(f"Tentando commit {short} (HEAD~{i})...")
+                subprocess.run(
+                    ["git", "checkout", ref, "--quiet"],
+                    capture_output=True, timeout=30,
+                    cwd=OPENCLAW_DIR,
+                )
+                try:
+                    _run_step(
+                        f"docker build -t openclaw:local ({short})",
+                        ["docker", "build", "-t", "openclaw:local", "-f", "Dockerfile", "."],
+                        timeout=600,
+                    )
+                    build_ok = True
+                    _log(f"Build OK no commit {short}")
+                    # Voltar ao main mas manter a imagem
+                    subprocess.run(
+                        ["git", "checkout", "main", "--quiet"],
+                        capture_output=True, timeout=30,
+                        cwd=OPENCLAW_DIR,
+                    )
+                    break
+                except RuntimeError:
+                    continue
+            # Garantir que estamos no main
+            subprocess.run(
+                ["git", "checkout", "main", "--quiet"],
+                capture_output=True, timeout=30,
+                cwd=OPENCLAW_DIR,
+            )
+
+        if not build_ok:
+            raise RuntimeError(
+                f"Nenhum dos ultimos {MAX_FALLBACK} commits buildou com sucesso"
+            )
+
         # Prune old images to save disk space
         subprocess.run(
             ["docker", "image", "prune", "-f"],
