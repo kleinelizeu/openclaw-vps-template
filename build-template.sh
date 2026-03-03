@@ -5,6 +5,7 @@ set -euo pipefail
 
 OPENCLAW_REPO="https://github.com/openclaw/openclaw.git"
 OPENCLAW_DIR="/opt/openclaw"
+OPENCLAW_VERSION="v2026.3.1"  # Versao pinada — estavel e testada
 SETUP_DIR="/opt/openclaw-setup"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -54,39 +55,14 @@ if [[ -d "${OPENCLAW_DIR}" ]]; then
 fi
 git clone "${OPENCLAW_REPO}" "${OPENCLAW_DIR}"
 
-log "Buildando imagem Docker openclaw:local"
+log "Fazendo checkout da versao ${OPENCLAW_VERSION}"
 cd "${OPENCLAW_DIR}"
+git checkout "${OPENCLAW_VERSION}" --quiet
 
-# Tenta buildar HEAD; se falhar, volta ate 10 commits para encontrar um que funcione
-BUILD_OK=false
-MAX_FALLBACK=10
+log "Buildando imagem Docker openclaw:local (${OPENCLAW_VERSION})"
+docker build -t openclaw:local -f Dockerfile .
 
-if docker build -t openclaw:local -f Dockerfile . 2>&1; then
-  BUILD_OK=true
-  log "Build OK no HEAD ($(git rev-parse --short HEAD))"
-else
-  log "Build falhou no HEAD, tentando commits anteriores..."
-  for i in $(seq 1 ${MAX_FALLBACK}); do
-    COMMIT="HEAD~${i}"
-    SHORT=$(git rev-parse --short "${COMMIT}" 2>/dev/null) || break
-    log "Tentando commit ${SHORT} (HEAD~${i})..."
-    git checkout "${COMMIT}" --quiet
-    if docker build -t openclaw:local -f Dockerfile . 2>&1; then
-      BUILD_OK=true
-      log "Build OK no commit ${SHORT} (HEAD~${i})"
-      # Voltar ao main mas manter a imagem buildada
-      git checkout main --quiet
-      break
-    fi
-  done
-  # Garantir que estamos no main
-  git checkout main --quiet 2>/dev/null || true
-fi
-
-if [[ "${BUILD_OK}" != "true" ]]; then
-  log "ERRO: Nenhum dos ultimos ${MAX_FALLBACK} commits buildou com sucesso"
-  exit 1
-fi
+log "Build OK (${OPENCLAW_VERSION} — $(git rev-parse --short HEAD))"
 
 # ── 4. Instalar wizard web (Flask + Gunicorn) ──
 log "Instalando wizard web de setup"
