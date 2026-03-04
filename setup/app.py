@@ -1395,6 +1395,13 @@ def setup():
         config.setdefault("agents", {}).setdefault("defaults", {})
         config["agents"]["defaults"]["model"] = {"primary": selected_model}
 
+    # Garantir canal WhatsApp disponivel para o usuario conectar quando quiser
+    config.setdefault("channels", {})
+    config["channels"].setdefault("whatsapp", {
+        "enabled": True,
+        "dmPolicy": "pairing",
+    })
+
     try:
         with open(config_path, "w") as f:
             json.dump(config, f, indent=2)

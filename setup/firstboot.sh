@@ -47,12 +47,6 @@ cat > /root/.openclaw/openclaw.json <<OCJSON
       "dangerouslyDisableDeviceAuth": true,
       "dangerouslyAllowHostHeaderOriginFallback": true
     }
-  },
-  "channels": {
-    "whatsapp": {
-      "enabled": true,
-      "dmPolicy": "pairing"
-    }
   }
 }
 OCJSON
