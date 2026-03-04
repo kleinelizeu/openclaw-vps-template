@@ -42,9 +42,16 @@ cat > /root/.openclaw/openclaw.json <<OCJSON
 {
   "gateway": {
     "mode": "local",
+    "trustedProxies": ["172.16.0.0/12"],
     "controlUi": {
       "dangerouslyDisableDeviceAuth": true,
       "dangerouslyAllowHostHeaderOriginFallback": true
+    }
+  },
+  "channels": {
+    "whatsapp": {
+      "enabled": true,
+      "dmPolicy": "pairing"
     }
   }
 }
