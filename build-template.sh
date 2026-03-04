@@ -204,9 +204,9 @@ rm -f /var/lib/openclaw-token
 rm -f /var/lib/openclaw-setup-done
 
 # Zerar espaco livre para melhor compressao do QCOW2
-log "Zerando espaco livre para compressao (pode demorar)..."
-dd if=/dev/zero of=/zero.fill bs=1M 2>/dev/null || true
-rm -f /zero.fill
+#log "Zerando espaco livre para compressao (pode demorar)..."
+#dd if=/dev/zero of=/zero.fill bs=1M 2>/dev/null || true
+#rm -f /zero.fill
 sync
 
 log "Template preparado com sucesso! Reiniciando..."
