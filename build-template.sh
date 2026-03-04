@@ -5,7 +5,6 @@ set -euo pipefail
 
 OPENCLAW_REPO="https://github.com/openclaw/openclaw.git"
 OPENCLAW_DIR="/opt/openclaw"
-OPENCLAW_VERSION="v2026.3.1"  # Versao pinada — estavel e testada
 SETUP_DIR="/opt/openclaw-setup"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -55,8 +54,22 @@ if [[ -d "${OPENCLAW_DIR}" ]]; then
 fi
 git clone "${OPENCLAW_REPO}" "${OPENCLAW_DIR}"
 
-log "Fazendo checkout da versao ${OPENCLAW_VERSION}"
 cd "${OPENCLAW_DIR}"
+
+# Detectar a ultima release tag estavel (sem beta)
+log "Detectando ultima release tag estavel"
+OPENCLAW_VERSION=$(git tag -l "v20*" --sort=-version:refname | grep -v beta | head -1)
+if [[ -z "${OPENCLAW_VERSION}" ]]; then
+  # Fallback: incluir betas se nenhuma release estavel encontrada
+  OPENCLAW_VERSION=$(git tag -l "v20*" --sort=-version:refname | head -1)
+fi
+
+if [[ -z "${OPENCLAW_VERSION}" ]]; then
+  echo "Erro: nenhuma tag de release encontrada no repositorio"
+  exit 1
+fi
+
+log "Fazendo checkout da versao ${OPENCLAW_VERSION}"
 git checkout "${OPENCLAW_VERSION}" --quiet
 
 log "Buildando imagem Docker openclaw:local (${OPENCLAW_VERSION})"

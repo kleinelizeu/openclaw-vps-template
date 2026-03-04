@@ -166,6 +166,10 @@ def run_update():
 
 class UpdateHandler(BaseHTTPRequestHandler):
     def _check_auth(self):
+        # Requests vindos via Nginx proxy (header interno, so acessivel via localhost)
+        if self.headers.get("X-Openclaw-Internal") == "true":
+            return True
+
         token = read_token()
         if not token:
             self._respond(500, {"error": "Token file not found"})
