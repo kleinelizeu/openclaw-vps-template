@@ -5,7 +5,8 @@ set -euo pipefail
 
 OPENCLAW_REPO="https://github.com/openclaw/openclaw.git"
 OPENCLAW_DIR="/opt/openclaw"
-OPENCLAW_VERSION="v2026.3.1"  # Versao pinada — estavel e testada
+# Usar sempre a ultima versao estavel disponivel
+OPENCLAW_VERSION=$(git -C "${OPENCLAW_DIR}" describe --tags $(git -C "${OPENCLAW_DIR}" rev-list --tags --max-count=1))
 SETUP_DIR="/opt/openclaw-setup"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -55,9 +56,7 @@ if [[ -d "${OPENCLAW_DIR}" ]]; then
 fi
 git clone "${OPENCLAW_REPO}" "${OPENCLAW_DIR}"
 
-log "Fazendo checkout da versao ${OPENCLAW_VERSION}"
-cd "${OPENCLAW_DIR}"
-git checkout "${OPENCLAW_VERSION}" --quiet
+log "Usando versao mais recente: ${OPENCLAW_VERSION}"
 
 log "Buildando imagem Docker openclaw:local (${OPENCLAW_VERSION})"
 docker build -t openclaw:local -f Dockerfile .
