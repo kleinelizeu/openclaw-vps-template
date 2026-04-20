@@ -29,6 +29,14 @@ apt-get install -y \
   ca-certificates gnupg lsb-release \
   openssl qemu-guest-agent
 
+# Substituir a pagina default do Nginx ("Welcome to nginx!")
+# pela pagina "instalando" logo apos o apt instalar o nginx.
+log "Instalando pagina de 'instalando' do Nginx"
+mkdir -p /var/www/html
+cp "${SCRIPT_DIR}/config/installing.html" /var/www/html/installing.html
+cp "${SCRIPT_DIR}/config/installing.html" /var/www/html/index.nginx-debian.html
+chmod 644 /var/www/html/installing.html /var/www/html/index.nginx-debian.html
+
 log "Instalando Docker CE"
 install -m 0755 -d /etc/apt/keyrings
 if [[ ! -f /etc/apt/keyrings/docker.gpg ]]; then
