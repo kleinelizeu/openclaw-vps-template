@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="refresh" content="15">
+    <title>OpenClaw — Instalando...</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700&family=Syne:wght@700;800&display=swap');
+        *{margin:0;padding:0;box-sizing:border-box}
+        :root{--bg:#0A0A0F;--card:#111118;--primary:#E53935;--primary-h:#C62828;--secondary:#FF6B35;--text:#F5F5F5;--muted:#888899;--border:#1E1E2A;--input:#0D0D14;--success:#4CAF50;--warning:#FFB300;--r:4px}
+        body{font-family:'Inter',-apple-system,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;-webkit-font-smoothing:antialiased;display:flex;align-items:center;justify-content:center;padding:16px}
+        body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(rgba(255,255,255,.015) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.015) 1px,transparent 1px);background-size:60px 60px;pointer-events:none;z-index:0}
+        ::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:var(--bg)}::-webkit-scrollbar-thumb{background:#1E1E2A;border-radius:3px}
+
+        .wz{max-width:640px;width:100%;position:relative;z-index:1}
+        .card{background:var(--card);border:1px solid rgba(255,255,255,.06);border-radius:var(--r);padding:40px 32px;animation:fadeIn .4s ease}
+        @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+
+        .hero-glow{background:radial-gradient(ellipse at center bottom,rgba(229,57,53,.08) 0%,transparent 60%);border-radius:var(--r);padding:12px;text-align:center}
+
+        h1{font-family:'Syne',sans-serif;font-size:28px;font-weight:800;line-height:1.2;margin-bottom:8px}
+        h1 .red{color:var(--primary)}
+        h1 .orange{color:var(--secondary)}
+        .sub{font-family:'Space Grotesk','Inter',sans-serif;color:var(--muted);font-size:14px;line-height:1.6;margin-top:12px;margin-bottom:28px}
+
+        /* Status line — rotating message */
+        .status{font-family:'Space Grotesk',sans-serif;font-size:14px;color:var(--text);min-height:22px;margin-bottom:14px;display:flex;align-items:center;justify-content:center;gap:10px}
+        .dot{width:8px;height:8px;border-radius:50%;background:var(--primary);box-shadow:0 0 12px rgba(229,57,53,.6);animation:pulse 1.4s ease-in-out infinite;flex-shrink:0}
+        @keyframes pulse{0%,100%{opacity:.4;transform:scale(.85)}50%{opacity:1;transform:scale(1.1)}}
+
+        /* Progress bar — same gradient as wizard .pb-fill */
+        .pb-track{height:3px;background:var(--border);border-radius:2px;overflow:hidden;position:relative}
+        .pb-fill{position:absolute;top:0;bottom:0;width:40%;background:linear-gradient(90deg,var(--primary),var(--secondary));border-radius:2px;animation:slide 2.2s ease-in-out infinite}
+        @keyframes slide{0%{left:-40%}100%{left:100%}}
+
+        /* Info panel (mono, same feel as wizard's .tp) */
+        .info{margin-top:28px;background:rgba(10,10,15,.6);border:1px solid var(--border);border-radius:var(--r);padding:14px 16px;font-family:'SF Mono','Fira Code','Consolas',monospace;font-size:12px;color:var(--muted);line-height:1.7;text-align:left}
+        .info .k{color:var(--text)}
+
+        .stitle{font-family:'Syne',sans-serif;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text);border-bottom:1px solid var(--border);padding-bottom:8px;margin-bottom:14px;margin-top:28px;text-align:left}
+
+        .hero-brand{font-size:12px;color:#444;margin-top:24px;letter-spacing:.05em;text-align:center}
+        .hero-brand span{color:var(--muted)}
+
+        @media(max-width:480px){
+            .card{padding:28px 20px}
+            h1{font-size:22px}
+        }
+    </style>
+</head>
+<body>
+    <div class="wz">
+        <div class="card">
+            <div class="hero-glow">
+                <div style="display:flex;align-items:center;justify-content:center;gap:16px;margin-bottom:24px">
+                    <img src="https://upload.wikimedia.org/wikipedia/commons/5/5e/Openclaw-logo-text-dark.png" alt="OpenClaw" style="height:44px" />
+                    <span style="color:#3a3a3a;font-size:24px;font-weight:300">+</span>
+                    <img src="https://lurahosting.com.br/images/logo.png" alt="Lura Hosting" style="height:44px" />
+                </div>
+
+                <h1>Instalando seu <span class="red">Open</span><span class="orange">Claw</span></h1>
+                <p class="sub">
+                    Aguarde alguns instantes — o servidor está finalizando a configuração.<br>
+                    Esta página atualiza sozinha assim que estiver pronto.
+                </p>
+
+                <div class="status">
+                    <span class="dot"></span>
+                    <span id="msg">Iniciando instalação...</span>
+                </div>
+
+                <div class="pb-track">
+                    <div class="pb-fill"></div>
+                </div>
+            </div>
+
+            <p class="stitle">Status da instalação</p>
+            <div class="info">
+                <div><span class="k">Serviço:</span> OpenClaw Gateway</div>
+                <div><span class="k">Etapa:</span> preparando containers Docker</div>
+                <div><span class="k">Tempo médio:</span> 3 a 10 minutos</div>
+                <div><span class="k">Próximo passo:</span> aguardando o gateway responder na porta 18789</div>
+            </div>
+
+            <p class="hero-brand">Powered by <span>bisnishub</span></p>
+        </div>
+    </div>
+
+    <script>
+        // Mesma sequência de mensagens usada no wizard (app.py linha 1064),
+        // adaptada para o contexto de "instalação ainda em andamento".
+        const msgs = [
+            'Subindo containers Docker...',
+            'Instalando configurações do OpenClaw...',
+            'Preparando o Gateway na porta 18789...',
+            'Aplicando regras do Nginx...',
+            'Conectando serviços internos...',
+            'Quase lá — finalizando a configuração...'
+        ];
+        let i = 0;
+        const el = document.getElementById('msg');
+        el.style.transition = 'opacity .2s ease';
+        setInterval(() => {
+            i = (i + 1) % msgs.length;
+            el.style.opacity = '0';
+            setTimeout(() => { el.textContent = msgs[i]; el.style.opacity = '1'; }, 200);
+        }, 2800);
+
+        // Verifica a cada 5s se o OpenClaw Gateway já está respondendo.
+        // Se sim, recarrega imediatamente (sem esperar o meta refresh de 15s).
+        setInterval(async () => {
+            try {
+                const r = await fetch('/', { method: 'HEAD', cache: 'no-store' });
+                if (r.ok) location.reload();
+            } catch (e) { /* continua esperando */ }
+        }, 5000);
+    </script>
+</body>
+</html>
