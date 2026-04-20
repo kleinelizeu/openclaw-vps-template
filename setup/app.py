@@ -1395,6 +1395,15 @@ def setup():
         config.setdefault("agents", {}).setdefault("defaults", {})
         config["agents"]["defaults"]["model"] = {"primary": selected_model}
 
+    # Habilitar plugins dos providers que foram configurados
+    config.setdefault("plugins", {}).setdefault("entries", {})
+    if anthropic_key:
+        config["plugins"]["entries"]["anthropic"] = {"enabled": True}
+    if openai_key:
+        config["plugins"]["entries"]["openai"] = {"enabled": True}
+    if openrouter_key:
+        config["plugins"]["entries"]["openrouter"] = {"enabled": True}
+
     # Garantir canal WhatsApp disponivel para o usuario conectar quando quiser
     config.setdefault("channels", {})
     config["channels"].setdefault("whatsapp", {
