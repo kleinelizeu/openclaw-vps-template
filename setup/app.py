@@ -1549,7 +1549,7 @@ def pairing():
             [
                 "docker", "compose", "-f", f"{OPENCLAW_DIR}/docker-compose.yml",
                 "exec", "-T", "openclaw-gateway",
-                "node", "dist/index.js", "pairing", "approve", "telegram", code,
+                "openclaw", "pairing", "approve", "telegram", code,
             ],
             capture_output=True,
             text=True,
