@@ -8,6 +8,34 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 log() { echo -e "\n==> $1\n"; }
 
+ensure_swap() {
+  if swapon --show | grep -q .; then
+    log "Swap ja esta ativa"
+    swapon --show || true
+    return
+  fi
+  log "Criando swap de 4G para estabilizar o build do OpenClaw"
+  fallocate -l 4G /swapfile
+  chmod 600 /swapfile
+  mkswap /swapfile
+  swapon /swapfile
+  grep -q "^/swapfile none swap sw 0 0" /etc/fstab || echo "/swapfile none swap sw 0 0" >> /etc/fstab
+  free -h
+  swapon --show
+}
+
+patch_openclaw_dockerfile() {
+  log "Ajustando Dockerfile do OpenClaw para VPS com pouca memoria"
+  if [[ ! -f Dockerfile ]]; then
+    echo "Erro: Dockerfile nao encontrado em $(pwd)"
+    exit 1
+  fi
+  if grep -q "NODE_OPTIONS=--max-old-space-size=8192" Dockerfile; then
+    sed -i 's/NODE_OPTIONS=--max-old-space-size=8192/NODE_OPTIONS=--max-old-space-size=3072/g' Dockerfile
+  fi
+  grep -n "NODE_OPTIONS=--max-old-space-size" Dockerfile || true
+}
+
 if [[ $EUID -ne 0 ]]; then
   echo "Erro: execute como root (sudo bash $0)"
   exit 1
@@ -58,6 +86,8 @@ systemctl start docker
 log "Docker: $(docker --version)"
 log "Compose: $(docker compose version)"
 
+ensure_swap
+
 log "Clonando OpenClaw em ${OPENCLAW_DIR}"
 if [[ -d "${OPENCLAW_DIR}" ]]; then
   rm -rf "${OPENCLAW_DIR}"
@@ -67,6 +97,8 @@ git clone "${OPENCLAW_REPO}" "${OPENCLAW_DIR}"
 cd "${OPENCLAW_DIR}"
 OPENCLAW_VERSION=$(git describe --tags "$(git rev-list --tags --max-count=1)" 2>/dev/null || echo "latest")
 log "Usando versao: ${OPENCLAW_VERSION}"
+
+patch_openclaw_dockerfile
 
 log "Buildando imagem Docker openclaw:local (${OPENCLAW_VERSION}) — pode demorar ~10 min"
 docker build -t openclaw:local -f Dockerfile .
