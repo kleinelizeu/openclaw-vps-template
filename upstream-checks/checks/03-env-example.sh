@@ -28,5 +28,6 @@ assert_file_contains "$ENV_EXAMPLE" "OPENROUTER_API_KEY" \
   "OPENROUTER_API_KEY documentada" || true
 
 # 3. Variavel do Telegram (canal principal configurado pelo wizard)
-assert_file_contains "$ENV_EXAMPLE" "TELEGRAM" \
-  "Configuracao Telegram documentada" || true
+# O upstream mudou de TELEGRAM generico para TELEGRAM_BOT_TOKEN
+assert_file_contains "$ENV_EXAMPLE" "TELEGRAM_BOT_TOKEN" \
+  "Configuracao Telegram documentada (TELEGRAM_BOT_TOKEN)" || true
