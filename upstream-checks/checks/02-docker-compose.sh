@@ -38,26 +38,30 @@ assert_file_contains "$COMPOSE" "OPENCLAW_IMAGE" \
 assert_file_contains "$COMPOSE" "OPENCLAW_GATEWAY_TOKEN" \
   "Variavel OPENCLAW_GATEWAY_TOKEN referenciada" || true
 
-# 8. Variavel OPENCLAW_GATEWAY_BIND (definida como 'lan' no .env)
-assert_file_contains "$COMPOSE" "OPENCLAW_GATEWAY_BIND" \
-  "Variavel OPENCLAW_GATEWAY_BIND referenciada" || true
+# 8. Variavel OPENCLAW_GATEWAY_PORT (porta do gateway, default 18789)
+assert_file_contains "$COMPOSE" "OPENCLAW_GATEWAY_PORT" \
+  "Variavel OPENCLAW_GATEWAY_PORT referenciada" || true
 
-# 9. Variavel OPENCLAW_CONFIG_DIR (monta /root/.openclaw no container)
+# 9. Variavel OPENCLAW_BRIDGE_PORT (porta da bridge, default 18790)
+assert_file_contains "$COMPOSE" "OPENCLAW_BRIDGE_PORT" \
+  "Variavel OPENCLAW_BRIDGE_PORT referenciada" || true
+
+# 10. Variavel OPENCLAW_CONFIG_DIR (monta /root/.openclaw no container)
 assert_file_contains "$COMPOSE" "OPENCLAW_CONFIG_DIR" \
   "Variavel OPENCLAW_CONFIG_DIR referenciada" || true
 
-# 10. Variavel OPENCLAW_WORKSPACE_DIR
+# 11. Variavel OPENCLAW_WORKSPACE_DIR
 assert_file_contains "$COMPOSE" "OPENCLAW_WORKSPACE_DIR" \
   "Variavel OPENCLAW_WORKSPACE_DIR referenciada" || true
 
-# 11. Comando gateway usa node dist/index.js gateway
+# 12. Comando gateway usa node dist/index.js gateway
 assert_file_contains "$COMPOSE" "dist/index.js" \
   "Comando usa dist/index.js como entry point" || true
 
 assert_file_contains "$COMPOSE" '"gateway"' \
   "Comando do gateway inclui subcomando 'gateway'" || true
 
-# 12. Variaveis CLAUDE (definidas vazias no firstboot.sh para evitar warnings)
+# 13. Variaveis CLAUDE (definidas vazias no firstboot.sh para evitar warnings)
 assert_file_contains "$COMPOSE" "CLAUDE_AI_SESSION_KEY" \
   "Variavel CLAUDE_AI_SESSION_KEY referenciada" || true
 
@@ -67,6 +71,10 @@ assert_file_contains "$COMPOSE" "CLAUDE_WEB_SESSION_KEY" \
 assert_file_contains "$COMPOSE" "CLAUDE_WEB_COOKIE" \
   "Variavel CLAUDE_WEB_COOKIE referenciada" || true
 
-# 13. Volume monta em /home/node/.openclaw
+# 14. Volume monta em /home/node/.openclaw
 assert_file_contains "$COMPOSE" "/home/node/.openclaw" \
   "Volume monta em /home/node/.openclaw" || true
+
+# 15. Gateway command includes --bind flag (upstream now uses --bind lan)
+assert_file_contains "$COMPOSE" "--bind" \
+  "Comando gateway inclui flag --bind" || true
