@@ -7,7 +7,7 @@
       "path": "Dockerfile",
       "must_exist": true,
       "must_contain": [
-        "node:22",
+        "node:24",
         "pnpm",
         "openclaw.mjs",
         "USER node",
@@ -26,7 +26,6 @@
         "OPENCLAW_GATEWAY_TOKEN",
         "OPENCLAW_GATEWAY_PORT",
         "OPENCLAW_BRIDGE_PORT",
-        "OPENCLAW_GATEWAY_BIND",
         "OPENCLAW_CONFIG_DIR",
         "OPENCLAW_WORKSPACE_DIR"
       ],
