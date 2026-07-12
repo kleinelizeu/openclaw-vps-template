@@ -31,6 +31,35 @@ done
 
 # ── Download dos arquivos upstream se necessario ──
 
+DOWNLOAD_MAX_RETRIES=3
+DOWNLOAD_RETRY_DELAY=5
+
+download_file_with_retry() {
+  local url="$1"
+  local output="$2"
+  local attempts=0
+
+  while (( attempts < DOWNLOAD_MAX_RETRIES )); do
+    attempts=$((attempts + 1))
+    if curl -sf --max-time 30 "$url" -o "$output" 2>/dev/null; then
+      # Verify file is not empty
+      if [[ -s "$output" ]]; then
+        echo "  OK: $(basename "$output") (attempt $attempts)"
+        return 0
+      else
+        echo "  EMPTY: $(basename "$output") (attempt $attempts)"
+        rm -f "$output"
+      fi
+    else
+      echo "  RETRY: $(basename "$output") falhou (attempt $attempts/${DOWNLOAD_MAX_RETRIES})"
+    fi
+    sleep "$DOWNLOAD_RETRY_DELAY"
+  done
+
+  echo "  MISSING: $(basename "$output") apos ${DOWNLOAD_MAX_RETRIES} tentativas"
+  return 1
+}
+
 if [[ -z "$UPSTREAM_DIR" ]] || [[ ! -d "$UPSTREAM_DIR" ]]; then
   UPSTREAM_DIR="/tmp/openclaw-upstream-check"
   rm -rf "$UPSTREAM_DIR"
@@ -41,11 +70,7 @@ if [[ -z "$UPSTREAM_DIR" ]] || [[ ! -d "$UPSTREAM_DIR" ]]; then
 
   echo "Baixando arquivos upstream de ${UPSTREAM_RAW}..."
   for file in "${FILES_TO_DOWNLOAD[@]}"; do
-    if curl -sf "${UPSTREAM_RAW}/${file}" -o "${UPSTREAM_DIR}/${file}" 2>/dev/null; then
-      echo "  OK: ${file}"
-    else
-      echo "  MISSING: ${file}"
-    fi
+    download_file_with_retry "${UPSTREAM_RAW}/${file}" "${UPSTREAM_DIR}/${file}" || true
   done
   echo ""
 fi
