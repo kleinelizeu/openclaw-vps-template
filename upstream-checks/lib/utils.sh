@@ -68,7 +68,7 @@ assert_file_contains() {
     return 1
   fi
 
-  if grep -q "$search_string" "$file_path" 2>/dev/null; then
+  if grep -qF -- "$search_string" "$file_path" 2>/dev/null; then
     report_pass "$check_name"
     return 0
   else
@@ -87,7 +87,7 @@ assert_file_not_contains() {
     return 0
   fi
 
-  if grep -q "$search_string" "$file_path" 2>/dev/null; then
+  if grep -qF -- "$search_string" "$file_path" 2>/dev/null; then
     report_fail "$check_name" "'$search_string' encontrado em $(basename "$file_path") (nao esperado)"
     return 1
   else
